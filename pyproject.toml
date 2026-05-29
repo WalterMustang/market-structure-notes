@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "market-structure-notes"
-version = "0.2.0"
+version = "0.2.1"
 description = "CLI + web tool for structured market structure notes (Wyckoff, SMC/ICT, Price Action). Status tracking, P&L logging, searchable metadata, local-first."
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,7 +36,12 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "jinja2>=3.1"]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.6",   # required by FastAPI for Form() data in web routes
+]
 
 [project.scripts]
 msn = "msn.cli:main"

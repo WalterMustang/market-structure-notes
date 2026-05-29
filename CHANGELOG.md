@@ -51,11 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CI failure + runtime error when running `msn serve` or importing the web app: `python-multipart` was missing from the `[web]` optional dependencies. FastAPI's `Form(...)` requires it for route registration. Now explicitly declared so `pip install 'market-structure-notes[web]'` works correctly out of the box.
+- Improved error messages in `create_app()` and `serve()` to mention the full web extra and what it pulls in.
+
 ### Planned for v0.2+
 - Better analytics (win rate by template, avg R:R per symbol)
 - Template versioning
 - Export to Obsidian/Notion with clean formatting
-- Optional GitHub Actions for basic tests on push
 - More example notes with real trade reviews
 
 ---

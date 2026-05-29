@@ -249,7 +249,11 @@ def create_app():
         from fastapi.responses import HTMLResponse, RedirectResponse
         from jinja2 import Template
     except ImportError:
-        raise RuntimeError("Web dependencies missing. Install with: pip install 'market-structure-notes[web]'")
+        raise RuntimeError(
+            "Web dependencies missing.\n"
+            "Install with: pip install 'market-structure-notes[web]'\n"
+            "This pulls in FastAPI, Uvicorn, Jinja2, and python-multipart (required for form handling)."
+        )
 
     app = FastAPI(title="Market Structure Notes")
 
@@ -793,6 +797,7 @@ def serve(port: int = 8765):
         import uvicorn
     except ImportError:
         print("Web dependencies missing. Install with: pip install 'market-structure-notes[web]'")
+        print("This includes FastAPI + python-multipart (needed for the web forms).")
         return
 
     app = create_app()
