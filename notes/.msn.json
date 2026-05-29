@@ -6,25 +6,25 @@
       "status": "paper",
       "symbol": "BTC",
       "timeframe": "4H",
-      "template": "",
+      "template": "wyckoff",
       "pnl": {
-        "entry": 105000.0,
-        "exit": 108500.0,
+        "entry": 105000,
+        "exit": 108500,
         "rr": 2.1,
         "result": "win"
       },
       "tags": [
         "liquidity"
       ],
-      "created_at": "2026-05-29T15:33:47.983553Z",
-      "updated_at": "2026-05-29T15:35:57.814252Z"
+      "created_at": "2026-05-29T15:43:09.169984Z",
+      "updated_at": "2026-05-29T15:43:15.298888Z"
     },
     "2026-05-29-ETH-1D": {
       "id": "2026-05-29-ETH-1D",
       "status": "paper",
       "symbol": "ETH",
       "timeframe": "1D",
-      "template": "",
+      "template": "volume-profile",
       "pnl": {
         "entry": 65000,
         "exit": 67200,
@@ -34,8 +34,8 @@
       "tags": [
         "liquidity"
       ],
-      "created_at": "2026-05-29T15:33:47.983641Z",
-      "updated_at": "2026-05-29T15:33:47.988207Z"
+      "created_at": "2026-05-29T15:43:09.170091Z",
+      "updated_at": "2026-05-29T15:43:15.302461Z"
     }
   }
 }

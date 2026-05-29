@@ -742,7 +742,11 @@ def serve(port: int = 8765):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Market Structure Notes")
+    parser = argparse.ArgumentParser(
+        description="Market Structure Notes — structured trading journal (Wyckoff/SMC/ICT)"
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__import__('msn').__version__}")
+
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_new = sub.add_parser("new")

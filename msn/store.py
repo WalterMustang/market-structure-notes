@@ -81,12 +81,30 @@ def _migrate_existing_notes(store: Dict[str, Any]) -> int:
 
         # Try to extract basic info from the markdown content
         content = md_file.read_text()
+        lines = content.splitlines()
         symbol = ""
         timeframe = ""
         template = ""
 
-        # Very simple extraction (works with current templates)
-        for line in content.splitlines():
+        # Detect template from title (first heading)
+        first_line = lines[0].lower() if lines else ""
+        if "wyckoff" in first_line:
+            template = "wyckoff"
+        elif "smc" in first_line or "ict" in first_line:
+            template = "smc"
+        elif "price action" in first_line:
+            template = "price-action"
+        elif "volume" in first_line:
+            template = "volume-profile"
+        elif "macro" in first_line:
+            template = "macro"
+        elif "session" in first_line:
+            template = "session"
+        else:
+            template = "minimal"
+
+        # Very simple extraction for symbol/timeframe
+        for line in lines:
             if line.lower().startswith("symbol:"):
                 symbol = line.split(":", 1)[1].strip()
             if line.lower().startswith("timeframe:"):

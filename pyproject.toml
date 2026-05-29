@@ -5,11 +5,34 @@ build-backend = "hatchling.build"
 [project]
 name = "market-structure-notes"
 version = "0.2.0"
-description = "Market Structure Notes — CLI + web tool for Wyckoff/SMC/ICT analysis with status, P&L tracking, and searchable metadata (v0.1 complete)"
+description = "CLI + web tool for structured market structure notes (Wyckoff, SMC/ICT, Price Action). Status tracking, P&L logging, searchable metadata, local-first."
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Djani", email = "djani@waltermustang.dev"}]
 requires-python = ">=3.10"
+keywords = [
+    "trading",
+    "technical-analysis",
+    "wyckoff",
+    "smc",
+    "ict",
+    "price-action",
+    "journal",
+    "notes",
+    "cli",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+]
 dependencies = []
 
 [project.optional-dependencies]
@@ -17,6 +40,12 @@ web = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "jinja2>=3.1"]
 
 [project.scripts]
 msn = "msn.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/WalterMustang/market-structure-notes"
+Repository = "https://github.com/WalterMustang/market-structure-notes"
+Issues = "https://github.com/WalterMustang/market-structure-notes/issues"
+Changelog = "https://github.com/WalterMustang/market-structure-notes/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["msn"]
