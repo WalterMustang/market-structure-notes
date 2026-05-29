@@ -31,11 +31,11 @@ This is the public roadmap. It is intentionally small and focused.
   - Win rate + average R:R overall
   - Breakdown by template and by symbol (closed trades only)
 - Better template detection during migration
+- Structured export:
+  - `msn export --format structured` → rich JSON (full metadata + markdown content)
+  - `msn export --format markdown` → individual .md files with proper YAML frontmatter (ready for Obsidian / Logseq / Notion)
 
 ### Remaining / Next
-- Structured export (`msn export structured` or similar)
-  - JSON with full metadata
-  - Markdown files with YAML frontmatter for Obsidian / Notion / Logseq
 - More review analytics (e.g. best performing setups, streaks, time-based filters)
 - Template versioning (simple)
 - Improved `msn edit` experience and note linking
@@ -70,6 +70,6 @@ We prioritize based on real daily usage and paper trading evidence, not feature 
 
 ---
 
-**Current status**: v0.2.0 — v0.1 complete. v0.2 analytics + search delivered. Next focus: structured export + deeper review tools.
+**Current status**: v0.2.1 — v0.1 complete. v0.2 analytics, search, and full structured export (JSON + Obsidian-friendly Markdown frontmatter) delivered. Next focus: deeper review analytics.
 
 See git history and CHANGELOG.md for exact changes.

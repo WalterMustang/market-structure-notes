@@ -241,6 +241,74 @@ def export_notes(fmt: str = "json"):
         print(f"Exported {len(export_data)} notes with full metadata to export-structured.json")
         print("This file contains status, P&L, tags + full markdown — perfect for Obsidian/Notion import or custom analysis.")
 
+    elif fmt == "markdown":
+        # v0.2: Obsidian / Notion / Logseq friendly export with real YAML frontmatter
+        store = load_store()
+        _migrate_existing_notes(store)
+
+        export_dir = ROOT / "export" / "markdown"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        for md_file in md_files:
+            note_id = md_file.stem
+            meta = store["notes"].get(note_id, {})
+            original_content = md_file.read_text()
+
+            frontmatter = _build_yaml_frontmatter(meta)
+            full_file = frontmatter + "\n" + original_content
+
+            out_file = export_dir / f"{note_id}.md"
+            out_file.write_text(full_file)
+            count += 1
+
+        print(f"Exported {count} notes as Markdown + YAML frontmatter → export/markdown/")
+        print("Drop the whole folder straight into Obsidian, Logseq, or Notion. Frontmatter is real YAML.")
+
+
+def _build_yaml_frontmatter(meta: dict) -> str:
+    """Generate clean YAML frontmatter for Obsidian-style notes. Zero external deps."""
+    lines = ["---"]
+
+    # Core identity
+    lines.append(f"id: {meta.get('id', '')}")
+    lines.append(f"status: {meta.get('status', 'idea')}")
+    if meta.get("symbol"):
+        lines.append(f"symbol: {meta.get('symbol')}")
+    if meta.get("timeframe"):
+        lines.append(f"timeframe: {meta.get('timeframe')}")
+    if meta.get("template"):
+        lines.append(f"template: {meta.get('template')}")
+
+    # P&L block
+    pnl = meta.get("pnl", {}) or {}
+    if any(pnl.get(k) is not None for k in ("entry", "exit", "rr", "result")):
+        lines.append("pnl:")
+        if pnl.get("entry") is not None:
+            lines.append(f"  entry: {pnl['entry']}")
+        if pnl.get("exit") is not None:
+            lines.append(f"  exit: {pnl['exit']}")
+        if pnl.get("rr") is not None:
+            lines.append(f"  rr: {pnl['rr']}")
+        if pnl.get("result"):
+            lines.append(f"  result: {pnl['result']}")
+
+    # Tags
+    tags = meta.get("tags", [])
+    if tags:
+        lines.append("tags:")
+        for t in tags:
+            lines.append(f"  - {t}")
+
+    # Timestamps
+    if meta.get("created_at"):
+        lines.append(f"created_at: {meta['created_at']}")
+    if meta.get("updated_at"):
+        lines.append(f"updated_at: {meta['updated_at']}")
+
+    lines.append("---")
+    return "\n".join(lines)
+
 
 def create_app():
     """Create the FastAPI web viewer app (reusable for CLI and previews)."""
@@ -828,8 +896,8 @@ def main():
     p_search.add_argument("query")
 
     p_export = sub.add_parser("export", help="Export notes")
-    p_export.add_argument("--format", default="json", choices=["json", "structured"],
-                          help="json = legacy (content only), structured = full metadata + markdown (recommended for review/analysis)")
+    p_export.add_argument("--format", default="json", choices=["json", "structured", "markdown"],
+                          help="json = legacy (raw content only), structured = rich JSON (analysis), markdown = Obsidian/Notion-friendly files with YAML frontmatter")
 
     p_templates = sub.add_parser("templates")
 

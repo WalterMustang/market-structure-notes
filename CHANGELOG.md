@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `msn export --format markdown`: Exports every note as a clean Markdown file with real YAML frontmatter (id, status, symbol, timeframe, template, full pnl block, tags, timestamps). The resulting files drop straight into Obsidian, Logseq, or Notion with zero extra work.
+
 ### Fixed
 - CI failure + runtime error when running `msn serve` or importing the web app: `python-multipart` was missing from the `[web]` optional dependencies. FastAPI's `Form(...)` requires it for route registration. Now explicitly declared so `pip install 'market-structure-notes[web]'` works correctly out of the box.
 - Improved error messages in `create_app()` and `serve()` to mention the full web extra and what it pulls in.
@@ -58,7 +61,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned for v0.2+
 - Better analytics (win rate by template, avg R:R per symbol)
 - Template versioning
-- Export to Obsidian/Notion with clean formatting
 - More example notes with real trade reviews
 
 ---
