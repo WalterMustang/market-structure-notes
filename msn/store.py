@@ -172,6 +172,14 @@ def list_notes_meta(
 
 
 def get_stats() -> Dict[str, Any]:
+    """
+    Rich analytics for review (v0.2 direction).
+
+    Returns:
+    - counts by status/symbol/template
+    - closed trade performance (overall + broken down by template and by symbol)
+    - average R:R on closed trades (where R:R was recorded)
+    """
     store = load_store()
     _migrate_existing_notes(store)
 
@@ -182,41 +190,116 @@ def get_stats() -> Dict[str, Any]:
     by_symbol: Dict[str, int] = {}
     by_template: Dict[str, int] = {}
 
-    closed = 0
+    closed_notes = 0
+    paper_notes = 0
+
+    # Overall closed performance
     wins = 0
     losses = 0
+    breakevens = 0
+    rr_values: List[float] = []
+
+    # Per-template performance (only closed)
+    template_perf: Dict[str, Dict[str, Any]] = {}
+    # Per-symbol performance (only closed)
+    symbol_perf: Dict[str, Dict[str, Any]] = {}
 
     for n in notes:
         s = n.get("status", "idea")
         by_status[s] = by_status.get(s, 0) + 1
 
+        if s == "paper":
+            paper_notes += 1
+
         sym = n.get("symbol", "").upper()
         if sym:
             by_symbol[sym] = by_symbol.get(sym, 0) + 1
 
-        tpl = n.get("template", "")
+        tpl = n.get("template", "") or "unknown"
         if tpl:
             by_template[tpl] = by_template.get(tpl, 0) + 1
 
+        # Only analyze closed trades for performance
         if s == "closed":
-            closed += 1
-            result = n.get("pnl", {}).get("result")
+            closed_notes += 1
+            pnl = n.get("pnl", {}) or {}
+            result = pnl.get("result")
+            rr = pnl.get("rr")
+
             if result == "win":
                 wins += 1
             elif result == "loss":
                 losses += 1
+            elif result == "breakeven":
+                breakevens += 1
 
-    win_rate = round((wins / closed * 100), 1) if closed > 0 else 0.0
+            if isinstance(rr, (int, float)):
+                rr_values.append(float(rr))
+
+            # Template performance
+            if tpl not in template_perf:
+                template_perf[tpl] = {"closed": 0, "wins": 0, "losses": 0, "breakevens": 0, "rrs": []}
+            template_perf[tpl]["closed"] += 1
+            if result == "win":
+                template_perf[tpl]["wins"] += 1
+            elif result == "loss":
+                template_perf[tpl]["losses"] += 1
+            elif result == "breakeven":
+                template_perf[tpl]["breakevens"] += 1
+            if isinstance(rr, (int, float)):
+                template_perf[tpl]["rrs"].append(float(rr))
+
+            # Symbol performance
+            if sym and sym not in symbol_perf:
+                symbol_perf[sym] = {"closed": 0, "wins": 0, "losses": 0, "breakevens": 0, "rrs": []}
+            if sym:
+                symbol_perf[sym]["closed"] += 1
+                if result == "win":
+                    symbol_perf[sym]["wins"] += 1
+                elif result == "loss":
+                    symbol_perf[sym]["losses"] += 1
+                elif result == "breakeven":
+                    symbol_perf[sym]["breakevens"] += 1
+                if isinstance(rr, (int, float)):
+                    symbol_perf[sym]["rrs"].append(float(rr))
+
+    # Calculate overall metrics
+    total_closed_with_result = wins + losses + breakevens
+    overall_win_rate = round((wins / total_closed_with_result * 100), 1) if total_closed_with_result > 0 else 0.0
+    avg_rr = round(sum(rr_values) / len(rr_values), 2) if rr_values else None
+
+    # Post-process template and symbol performance
+    def _finalize_perf(d: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        for key, p in d.items():
+            closed = p["closed"]
+            w = p["wins"]
+            wr = round((w / closed * 100), 1) if closed > 0 else 0.0
+            rrs = p["rrs"]
+            avg = round(sum(rrs) / len(rrs), 2) if rrs else None
+            p["win_rate"] = wr
+            p["avg_rr"] = avg
+            p.pop("rrs", None)  # clean up raw list
+        return d
+
+    template_perf = _finalize_perf(template_perf)
+    symbol_perf = _finalize_perf(symbol_perf)
 
     return {
         "total_notes": total,
         "by_status": by_status,
         "by_symbol": by_symbol,
         "by_template": by_template,
-        "closed_notes": closed,
-        "wins": wins,
-        "losses": losses,
-        "win_rate": win_rate,
+        "paper_notes": paper_notes,
+        "closed_notes": closed_notes,
+        "performance": {
+            "wins": wins,
+            "losses": losses,
+            "breakevens": breakevens,
+            "win_rate": overall_win_rate,
+            "avg_rr": avg_rr,
+            "by_template": template_perf,
+            "by_symbol": symbol_perf,
+        },
     }
 
 

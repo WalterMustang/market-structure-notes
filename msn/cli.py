@@ -22,6 +22,8 @@ from msn.store import (
     add_tag,
     set_note_meta,
     get_note_meta,
+    load_store,
+    _migrate_existing_notes,
 )
 
 
@@ -114,19 +116,48 @@ def list_notes(filter_str: str = None, status: str = None, symbol: str = None):
 
 
 def search_notes(query: str):
+    """Search across both metadata (status, tags, P&L, symbol, template) and note content. v0.2 upgrade."""
     ensure_notes_dir()
-    results = []
-    for note in NOTES_DIR.glob("*.md"):
-        if query.lower() in note.read_text().lower():
-            results.append(note.name)
+    q = query.lower()
 
-    if not results:
+    # Get all notes with metadata
+    meta_results = list_notes_meta()
+
+    matches = []
+    for m in meta_results:
+        nid = m["id"]
+        content = ""
+        md_path = NOTES_DIR / f"{nid}.md"
+        if md_path.exists():
+            content = md_path.read_text().lower()
+
+        # Search in metadata fields + content
+        haystack = " ".join([
+            nid.lower(),
+            m.get("symbol", "").lower(),
+            m.get("template", "").lower(),
+            m.get("status", ""),
+            " ".join(m.get("tags", [])),
+            str(m.get("pnl", {}).get("result", "")),
+            content
+        ])
+
+        if q in haystack:
+            matches.append(m)
+
+    if not matches:
         print(f"No matches for '{query}'")
         return
 
-    print(f"Matches for '{query}':")
-    for r in results:
-        print(f"  {r}")
+    print(f"Found {len(matches)} match(es) for '{query}':\n")
+    for m in matches:
+        status_icon = {"idea": "💡", "paper": "📝", "closed": "✅"}.get(m.get("status"), "•")
+        pnl = m.get("pnl", {})
+        extra = ""
+        if pnl.get("result"):
+            extra = f" | {pnl['result'].upper()}"
+        tags = f" [{', '.join(m.get('tags', []))}]" if m.get("tags") else ""
+        print(f"  {status_icon} {m['id']}  {m.get('status')}{extra}{tags}")
 
 
 def edit_note_cli(note_id: str):
@@ -171,16 +202,44 @@ def edit_note_cli(note_id: str):
 
 def export_notes(fmt: str = "json"):
     ensure_notes_dir()
-    notes = list(NOTES_DIR.glob("*.md"))
-    if not notes:
+    md_files = sorted(NOTES_DIR.glob("*.md"), reverse=True)
+    if not md_files:
         print("No notes to export.")
         return
 
     if fmt == "json":
-        data = [{"filename": n.name, "content": n.read_text()} for n in notes]
+        # Legacy simple export (raw content only)
+        data = [{"filename": n.name, "content": n.read_text()} for n in md_files]
         out = ROOT / "export.json"
         out.write_text(json.dumps(data, indent=2))
-        print(f"Exported {len(notes)} notes to export.json")
+        print(f"Exported {len(md_files)} notes to export.json (legacy format)")
+
+    elif fmt == "structured":
+        # v0.2 structured export: full metadata + markdown (ideal for Obsidian, Notion, analysis)
+        store = load_store()
+        _migrate_existing_notes(store)
+
+        export_data = []
+        for md_file in md_files:
+            note_id = md_file.stem
+            meta = store["notes"].get(note_id, {})
+            export_data.append({
+                "id": note_id,
+                "meta": meta,
+                "markdown": md_file.read_text(),
+            })
+
+        out_path = ROOT / "export-structured.json"
+        from datetime import datetime
+        out_path.write_text(json.dumps({
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "version": "0.2",
+            "count": len(export_data),
+            "notes": export_data
+        }, indent=2))
+
+        print(f"Exported {len(export_data)} notes with full metadata to export-structured.json")
+        print("This file contains status, P&L, tags + full markdown — perfect for Obsidian/Notion import or custom analysis.")
 
 
 def create_app():
@@ -763,8 +822,9 @@ def main():
     p_search = sub.add_parser("search")
     p_search.add_argument("query")
 
-    p_export = sub.add_parser("export")
-    p_export.add_argument("--format", default="json", choices=["json"])
+    p_export = sub.add_parser("export", help="Export notes")
+    p_export.add_argument("--format", default="json", choices=["json", "structured"],
+                          help="json = legacy (content only), structured = full metadata + markdown (recommended for review/analysis)")
 
     p_templates = sub.add_parser("templates")
 
@@ -806,14 +866,44 @@ def main():
         print("\n".join(list_templates()))
     elif args.cmd == "stats":
         stats = get_stats()
-        print("\n=== Market Structure Notes — Stats ===")
-        print(f"Total notes:     {stats['total_notes']}")
-        print(f"By status:       {stats['by_status']}")
-        print(f"By symbol:       {stats['by_symbol']}")
-        print(f"By template:     {stats['by_template']}")
-        print(f"Closed notes:    {stats['closed_notes']}")
-        print(f"Wins / Losses:   {stats['wins']} / {stats['losses']}")
-        print(f"Win rate:        {stats['win_rate']}%\n")
+        perf = stats.get("performance", {})
+
+        print("\n=== Market Structure Notes — Stats (v0.2 analytics) ===\n")
+
+        # High level counts
+        print(f"Total notes:      {stats['total_notes']}")
+        print(f"By status:        {stats['by_status']}")
+        print(f"Paper notes:      {stats.get('paper_notes', 0)}")
+        print(f"Closed notes:     {stats['closed_notes']}")
+        print(f"By symbol:        {stats['by_symbol']}")
+        print(f"By template:      {stats['by_template']}\n")
+
+        # Overall performance
+        if stats['closed_notes'] > 0:
+            print("--- Closed Trade Performance ---")
+            print(f"Wins / Losses / BE:  {perf['wins']} / {perf['losses']} / {perf['breakevens']}")
+            print(f"Win rate:            {perf['win_rate']}%")
+            if perf.get("avg_rr") is not None:
+                print(f"Average R:R:         {perf['avg_rr']}")
+            print()
+
+            # By template performance
+            if perf.get("by_template"):
+                print("--- Performance by Template ---")
+                for tpl, p in sorted(perf["by_template"].items(), key=lambda x: -x[1]["closed"]):
+                    rr_str = f" | avg RR {p['avg_rr']}" if p.get("avg_rr") else ""
+                    print(f"  {tpl:<18} {p['closed']:>2} closed  |  {p['win_rate']:>5.1f}% win{rr_str}")
+                print()
+
+            # By symbol performance
+            if perf.get("by_symbol"):
+                print("--- Performance by Symbol ---")
+                for sym, p in sorted(perf["by_symbol"].items(), key=lambda x: -x[1]["closed"]):
+                    rr_str = f" | avg RR {p['avg_rr']}" if p.get("avg_rr") else ""
+                    print(f"  {sym:<6} {p['closed']:>2} closed  |  {p['win_rate']:>5.1f}% win{rr_str}")
+                print()
+        else:
+            print("No closed trades yet. Mark some notes as 'closed' with P&L to see performance analytics.\n")
     elif args.cmd == "status":
         meta = set_status(args.note_id, args.new_status)
         print(f"Updated {args.note_id} → status={meta['status']}")
