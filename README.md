@@ -27,22 +27,31 @@ pip install -e .
 msn --help
 msn templates
 msn new --template wyckoff --symbol BTC --timeframe 4H
-msn list
+
+# v0.1 rich commands
+msn list --status paper --symbol BTC
+msn stats
+msn status 2026-05-29-BTC-4H paper
+msn pnl 2026-05-29-BTC-4H --entry 105000 --exit 108500 --rr 2.1 --result win
+msn tag 2026-05-29-BTC-4H liquidity
+msn edit 2026-05-29-BTC-4H     # opens in $EDITOR
+
 msn serve
 ```
 
-Then open http://localhost:8765 to browse all your notes in the browser.
+Then open http://localhost:8765 — the web viewer now shows status, P&L, tags, and lets you change status or log P&L directly from the browser.
 
 ---
 
-## Features
+## Features (v0.1 complete)
 
 - **Templates**: Wyckoff, SMC, Price Action, Minimal, Volume Profile, Macro, Session, and more
-- **CLI**: Create, list, search, and export notes from the terminal
-- **Web viewer**: Side-by-side editing with live preview and symbol filters
+- **Rich metadata**: Every note has status (idea/paper/closed), P&L fields, and tags
+- **CLI**: `new`, `list` (filter by status/symbol), `stats`, `status`, `pnl`, `tag`, `edit`, `search`, `serve`
+- **Web viewer**: Rich cards with status badges, P&L summary, tags + quick status/P&L editing from browser
 - **Extensible**: Drop any `.md` file in `templates/` — the CLI discovers it automatically
 - **Export**: JSON + zip bundles for Obsidian, Notion, or backup
-- **Private**: Everything stays on your machine
+- **Private & local**: Everything stays on your machine, zero cloud
 
 ---
 
@@ -76,8 +85,7 @@ Good first issues are labeled `good first issue`.
 
 See [ROADMAP.md](ROADMAP.md) for planned work.
 
-Current focus (v0.1):
-- Stronger data layer (search, stats, P&L logging)
+v0.1 is complete (data layer, CLI, web upgrades, P&L tracking). See ROADMAP.md for v0.2+.
 - Better CLI commands
 - Cleaner web viewer
 

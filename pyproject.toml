@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "market-structure-notes"
-version = "1.0.0"
-description = "Structured market structure note-taking tool with CLI and optional web viewer"
+version = "0.2.0"
+description = "Market Structure Notes — CLI + web tool for Wyckoff/SMC/ICT analysis with status, P&L tracking, and searchable metadata (v0.1 complete)"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Djani", email = "djani@waltermustang.dev"}]

@@ -129,6 +129,46 @@ def search_notes(query: str):
         print(f"  {r}")
 
 
+def edit_note_cli(note_id: str):
+    """Open a note in $EDITOR (or fallback to simple input)."""
+    ensure_notes_dir()
+    # Find the file (note_id can be full name or stem)
+    candidates = list(NOTES_DIR.glob(f"{note_id}*.md"))
+    if not candidates:
+        # Try exact
+        path = NOTES_DIR / (note_id if note_id.endswith(".md") else f"{note_id}.md")
+        if not path.exists():
+            print(f"Note not found: {note_id}")
+            return
+    else:
+        path = candidates[0]
+
+    import os
+    import subprocess
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+    try:
+        subprocess.call([editor, str(path)])
+    except FileNotFoundError:
+        print(f"Editor '{editor}' not found. Falling back to simple edit.")
+        print(f"Current content of {path.name}:")
+        print(path.read_text())
+        print("\n--- Paste new full content (end with EOF) ---")
+        new_content = []
+        try:
+            while True:
+                line = input()
+                new_content.append(line)
+        except EOFError:
+            pass
+        path.write_text("\n".join(new_content))
+        print("Saved.")
+
+    # Touch the metadata updated_at
+    set_note_meta(note_id.replace(".md", ""), updated_at=None)  # will set current time inside set_note_meta
+    print(f"Opened/edited: {path.name}")
+
+
 def export_notes(fmt: str = "json"):
     ensure_notes_dir()
     notes = list(NOTES_DIR.glob("*.md"))
@@ -247,51 +287,78 @@ def create_app():
     """
 
     @app.get("/", response_class=HTMLResponse)
-    def index(q: str = "", symbol: str = ""):
+    def index(q: str = "", symbol: str = "", status: str = ""):
         ensure_notes_dir()
-        all_notes = sorted(NOTES_DIR.glob("*.md"), reverse=True)
-        
-        # Apply symbol filter first (from clickable pills)
-        if symbol:
-            all_notes = [n for n in all_notes if f"Symbol: {symbol}" in n.read_text() or f"Symbol:{symbol}" in n.read_text()]
-        
-        # Then apply text search
+
+        # === v0.1: Use the metadata store for rich data ===
+        meta_notes = list_notes_meta(status=status if status else None, symbol=symbol if symbol else None)
+
+        # Apply text search on top of metadata results (search in id + tags + we will check content if needed)
         if q:
-            all_notes = [n for n in all_notes if q.lower() in n.read_text().lower() or q.lower() in n.name.lower()]
-        
-        # Build symbol set from ALL notes (not just filtered) for the pills
-        all_symbols = set()
-        for n in sorted(NOTES_DIR.glob("*.md"), reverse=True):
-            m = re.search(r"Symbol:\s*([A-Z0-9]+)", n.read_text())
-            if m: all_symbols.add(m.group(1))
-        
+            filtered = []
+            for m in meta_notes:
+                note_path = NOTES_DIR / f"{m['id']}.md"
+                content = note_path.read_text().lower() if note_path.exists() else ""
+                if (q.lower() in m['id'].lower() or
+                    q.lower() in " ".join(m.get('tags', [])) or
+                    q.lower() in content):
+                    filtered.append(m)
+            meta_notes = filtered
+
+        # Build symbol set for pills (from store for speed)
+        all_symbols = set(m['symbol'] for m in list_notes_meta() if m.get('symbol'))
+
         # Current active filter display
         filter_pill = ""
+        active_filters = []
         if symbol:
-            filter_pill = f'<a href="/" class="inline-flex items-center gap-1 px-3 py-1 bg-white text-zinc-950 text-xs rounded-full font-medium">Filtering: {symbol} <span class="text-zinc-500">×</span></a>'
-        
-        # Clickable symbol pills
+            active_filters.append(f"symbol:{symbol}")
+        if status:
+            active_filters.append(f"status:{status}")
+        if active_filters:
+            filter_pill = f'<a href="/" class="inline-flex items-center gap-1 px-3 py-1 bg-white text-zinc-950 text-xs rounded-full font-medium">Filtering: {" + ".join(active_filters)} <span class="text-zinc-500">×</span></a>'
+
+        # Symbol pills (clickable)
         symbol_pills = ""
         if all_symbols:
             pills = []
             for sym in sorted(all_symbols):
                 active = "bg-white text-zinc-950" if sym == symbol else "bg-zinc-800 hover:bg-zinc-700"
-                pills.append(f'<a href="/?symbol={sym}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{sym}</a>')
+                pills.append(f'<a href="/?symbol={sym}{"&status="+status if status else ""}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{sym}</a>')
             symbol_pills = "".join(pills)
+
+        # Status filter pills (new in v0.1)
+        status_pills = ""
+        status_options = ["idea", "paper", "closed"]
+        status_labels = {"idea": "💡 Idea", "paper": "📝 Paper", "closed": "✅ Closed"}
+        st_pills = []
+        for st in status_options:
+            active = "bg-white text-zinc-950" if st == status else "bg-zinc-800 hover:bg-zinc-700"
+            href = f"/?status={st}"
+            if symbol: href += f"&symbol={symbol}"
+            st_pills.append(f'<a href="{href}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{status_labels[st]}</a>')
+        status_pills = "".join(st_pills)
         
+        # Use real stats from store (v0.1)
+        store_stats = get_stats()
+
         stats_html = f"""
-        <div class="grid grid-cols-3 gap-4 mb-6">
+        <div class="grid grid-cols-4 gap-4 mb-6">
             <div class="bg-zinc-900 rounded-3xl p-6">
                 <div class="text-sm text-zinc-500">Total Notes</div>
-                <div class="text-4xl font-semibold mt-2">{len(all_notes)}</div>
+                <div class="text-4xl font-semibold mt-2">{store_stats['total_notes']}</div>
             </div>
             <div class="bg-zinc-900 rounded-3xl p-6">
                 <div class="text-sm text-zinc-500 mb-2">Symbols Tracked</div>
                 <div class="flex flex-wrap gap-1.5">{symbol_pills or '<span class="text-xs text-zinc-500">No symbols yet</span>'}</div>
             </div>
             <div class="bg-zinc-900 rounded-3xl p-6">
-                <div class="text-sm text-zinc-500">Templates</div>
-                <div class="text-4xl font-semibold mt-2">{len(list_templates())}</div>
+                <div class="text-sm text-zinc-500 mb-1">Status</div>
+                <div class="flex flex-wrap gap-1.5">{status_pills}</div>
+            </div>
+            <div class="bg-zinc-900 rounded-3xl p-6">
+                <div class="text-sm text-zinc-500">Win Rate (closed)</div>
+                <div class="text-4xl font-semibold mt-1">{store_stats['win_rate']}% <span class="text-sm text-zinc-500">({store_stats['wins']}W / {store_stats['losses']}L)</span></div>
             </div>
         </div>
         {f'<div class="mb-4">{filter_pill}</div>' if filter_pill else ''}
@@ -320,18 +387,60 @@ def create_app():
         """
 
         notes_html = ""
-        if all_notes:
-            for note in all_notes:
-                content = note.read_text()
-                preview = "\n".join(content.split("\n")[:6])
+        if meta_notes:
+            for m in meta_notes:
+                nid = m['id']
+                status = m.get('status', 'idea')
+                status_badge = {
+                    'idea': '<span class="px-2 py-0.5 text-[10px] rounded-full bg-amber-900/60 text-amber-300">IDEA</span>',
+                    'paper': '<span class="px-2 py-0.5 text-[10px] rounded-full bg-blue-900/60 text-blue-300">PAPER</span>',
+                    'closed': '<span class="px-2 py-0.5 text-[10px] rounded-full bg-emerald-900/60 text-emerald-300">CLOSED</span>',
+                }.get(status, '')
+
+                pnl = m.get('pnl', {})
+                pnl_html = ""
+                if pnl.get('result'):
+                    color = "text-emerald-400" if pnl['result'] == 'win' else ("text-red-400" if pnl['result'] == 'loss' else "text-zinc-400")
+                    pnl_html = f'<span class="{color} text-xs font-medium">{pnl["result"].upper()}</span> R:R {pnl.get("rr", "?")}'
+                elif pnl.get('entry'):
+                    pnl_html = f'<span class="text-xs text-zinc-400">entry {pnl.get("entry")}</span>'
+
+                tags_html = ""
+                if m.get('tags'):
+                    tags_html = " ".join([f'<span class="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">#{t}</span>' for t in m['tags']])
+
                 notes_html += f"""
-                <a href="/edit/{note.name}" class="block note-card bg-zinc-900 border border-zinc-800 rounded-3xl p-6 mb-4 hover:border-zinc-700">
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="font-mono text-sm text-zinc-400">{note.name}</div>
-                        <div class="text-xs px-3 py-1 bg-zinc-950 rounded-full text-zinc-500">edit</div>
+                <div class="note-card bg-zinc-900 border border-zinc-800 rounded-3xl p-5 mb-3 hover:border-zinc-700">
+                    <div class="flex items-start justify-between mb-2">
+                        <a href="/edit/{nid}.md" class="font-mono text-sm text-white hover:underline">{nid}</a>
+                        <div class="flex items-center gap-2">
+                            {status_badge}
+                            <a href="/edit/{nid}.md" class="text-[10px] px-2 py-0.5 bg-zinc-950 hover:bg-zinc-800 rounded text-zinc-400">edit</a>
+                        </div>
                     </div>
-                    <pre class="text-zinc-300 whitespace-pre-wrap font-mono text-[13px] leading-relaxed bg-black/40 p-4 rounded-2xl overflow-auto">{preview}</pre>
-                </a>
+
+                    <div class="flex items-center gap-3 text-xs mb-3">
+                        <span class="text-zinc-400">{m.get('symbol','')} {m.get('timeframe','')}</span>
+                        {pnl_html}
+                        {tags_html}
+                    </div>
+
+                    <!-- Quick status actions (v0.1) -->
+                    <div class="flex gap-1.5 mb-2">
+                        <form method="post" action="/set-status/{nid}" class="inline">
+                            <input type="hidden" name="status" value="idea">
+                            <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-amber-900/40 hover:bg-amber-900/70 text-amber-300">Idea</button>
+                        </form>
+                        <form method="post" action="/set-status/{nid}" class="inline">
+                            <input type="hidden" name="status" value="paper">
+                            <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-blue-900/40 hover:bg-blue-900/70 text-blue-300">Paper</button>
+                        </form>
+                        <form method="post" action="/set-status/{nid}" class="inline">
+                            <input type="hidden" name="status" value="closed">
+                            <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-emerald-900/40 hover:bg-emerald-900/70 text-emerald-300">Closed</button>
+                        </form>
+                    </div>
+                </div>
                 """
         else:
             notes_html = '<div class="text-center py-12 text-zinc-500">No notes found for this filter. <a href="/" class="underline">Clear filter</a></div>'
@@ -364,8 +473,85 @@ def create_app():
             return HTMLResponse("Note not found", status_code=404)
         
         content = path.read_text()
+        note_id = filename.replace(".md", "")
+
+        # Pull metadata (v0.1)
+        meta = get_note_meta(note_id) or {"status": "idea", "pnl": {}, "tags": []}
+        status = meta.get("status", "idea")
+        pnl = meta.get("pnl", {})
+
+        status_badge = {
+            "idea": '<span class="px-3 py-1 text-sm rounded-full bg-amber-900/60 text-amber-300">IDEA</span>',
+            "paper": '<span class="px-3 py-1 text-sm rounded-full bg-blue-900/60 text-blue-300">PAPER</span>',
+            "closed": '<span class="px-3 py-1 text-sm rounded-full bg-emerald-900/60 text-emerald-300">CLOSED</span>',
+        }.get(status, status)
+
+        pnl_display = ""
+        if pnl.get("result"):
+            color = "emerald" if pnl["result"] == "win" else ("red" if pnl["result"] == "loss" else "zinc")
+            pnl_display = f'<span class="text-{color}-400 font-medium">{pnl["result"].upper()}</span>  |  R:R {pnl.get("rr", "-")}  |  entry {pnl.get("entry", "-")} → exit {pnl.get("exit", "-")}'
+        elif pnl.get("entry"):
+            pnl_display = f'entry {pnl.get("entry")} (no exit yet)'
+
+        tags_display = " ".join([f'<span class="text-xs px-2 py-0.5 bg-zinc-800 rounded">#{t}</span>' for t in meta.get("tags", [])]) or '<span class="text-xs text-zinc-500">no tags</span>'
+
+        # Pre-compute selected options for P&L form
+        res = pnl.get("result") or ""
+        sel_win = "selected" if res == "win" else ""
+        sel_loss = "selected" if res == "loss" else ""
+        sel_be  = "selected" if res == "breakeven" else ""
+
         html = f"""
         <div class="max-w-7xl">
+            <!-- Metadata bar (v0.1) -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                <div class="flex items-center gap-3">
+                    <span class="text-zinc-500 text-xs">STATUS</span> {status_badge}
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-zinc-500 text-xs">P&amp;L</span> <span class="text-zinc-300">{pnl_display or '—'}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-zinc-500 text-xs">TAGS</span> {tags_display}
+                </div>
+                <div class="flex-1"></div>
+                <div class="flex items-center gap-2 text-xs">
+                    <form method="post" action="/set-status/{note_id}" class="flex gap-1">
+                        <button name="status" value="idea" class="px-2 py-0.5 rounded bg-amber-900/50 hover:bg-amber-900/80">Idea</button>
+                        <button name="status" value="paper" class="px-2 py-0.5 rounded bg-blue-900/50 hover:bg-blue-900/80">Paper</button>
+                        <button name="status" value="closed" class="px-2 py-0.5 rounded bg-emerald-900/50 hover:bg-emerald-900/80">Closed</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Quick P&L form (v0.1) -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 mb-6">
+                <form method="post" action="/set-pnl/{note_id}" class="flex flex-wrap items-end gap-3 text-sm">
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Entry</label>
+                        <input type="text" name="entry" value="{pnl.get('entry') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Exit</label>
+                        <input type="text" name="exit" value="{pnl.get('exit') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">R:R</label>
+                        <input type="text" name="rr" value="{pnl.get('rr') or ''}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Result</label>
+                        <select name="result" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm">
+                            <option value="">—</option>
+                            <option value="win" {sel_win}>win</option>
+                            <option value="loss" {sel_loss}>loss</option>
+                            <option value="breakeven" {sel_be}>breakeven</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="ml-2 px-5 py-1.5 bg-white text-zinc-950 rounded-2xl text-sm font-medium">Save P&amp;L</button>
+                </form>
+            </div>
+
             <div class="flex items-center justify-between mb-6">
                 <div>
                     <div class="font-mono text-sm text-zinc-500">{filename}</div>
@@ -478,6 +664,28 @@ def create_app():
             path.unlink()
         return RedirectResponse("/", status_code=303)
 
+    # === v0.1: Status & P&L updates from web ===
+    @app.post("/set-status/{note_id}")
+    async def set_status_web(note_id: str, status: str = Form(...)):
+        try:
+            set_status(note_id, status)
+        except Exception as e:
+            print(f"Status update error: {e}")
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/set-pnl/{note_id}")
+    async def set_pnl_web(note_id: str, entry: str = Form(""), exit: str = Form(""), rr: str = Form(""), result: str = Form("")):
+        try:
+            updates = {}
+            if entry: updates["entry"] = float(entry) if entry else None
+            if exit:  updates["exit"]  = float(exit) if exit else None
+            if rr:    updates["rr"]    = float(rr) if rr else None
+            if result: updates["result"] = result or None
+            update_pnl(note_id, **updates)
+        except Exception as e:
+            print(f"P&L update error: {e}")
+        return RedirectResponse(f"/edit/{note_id}.md", status_code=303)
+
     # === Export routes (v1.0) ===
     @app.get("/export/json")
     async def export_json():
@@ -574,6 +782,9 @@ def main():
     p_tag.add_argument("note_id")
     p_tag.add_argument("tag")
 
+    p_edit = sub.add_parser("edit", help="Edit a note in your $EDITOR (or fallback)")
+    p_edit.add_argument("note_id", help="Note ID (e.g. 2026-05-29-BTC-4H)")
+
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--port", type=int, default=8765)
 
@@ -614,6 +825,8 @@ def main():
     elif args.cmd == "tag":
         meta = add_tag(args.note_id, args.tag)
         print(f"Added tag '{args.tag}' to {args.note_id}. Tags: {meta['tags']}")
+    elif args.cmd == "edit":
+        edit_note_cli(args.note_id)
     elif args.cmd == "serve":
         serve(args.port)
 

@@ -57,4 +57,4 @@ We prioritize based on real daily usage, not feature requests.
 
 ---
 
-**Current status**: v1.0.0 released. v0.1 work starting.
+**Current status**: v0.2.0 — v0.1 roadmap complete (data layer + CLI + web upgrades + P&L + status tracking). See git history for exact changes.
