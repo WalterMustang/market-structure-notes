@@ -13,6 +13,17 @@ ROOT = Path(__file__).parent.parent
 TEMPLATES_DIR = ROOT / "templates"
 NOTES_DIR = ROOT / "notes"
 
+# Import the new metadata store (v0.1)
+from msn.store import (
+    get_stats,
+    list_notes_meta,
+    set_status,
+    update_pnl,
+    add_tag,
+    set_note_meta,
+    get_note_meta,
+)
+
 
 def ensure_notes_dir():
     NOTES_DIR.mkdir(exist_ok=True)
@@ -52,23 +63,54 @@ def create_note(template_name: str, symbol: str, timeframe: str, date_str: str =
     filename = f"{date_str}-{symbol.upper()}-{timeframe.upper()}.md"
     filepath = NOTES_DIR / filename
     filepath.write_text(content)
-    print(f"Created: {filepath.relative_to(ROOT)}")
+
+    # Register in the metadata store (v0.1)
+    note_id = filename.replace(".md", "")
+    set_note_meta(
+        note_id,
+        status="idea",
+        symbol=symbol.upper(),
+        timeframe=timeframe.upper(),
+        template=template_name,
+    )
+
+    print(f"Created: {filepath.relative_to(ROOT)}  (status=idea)")
     return filepath
 
 
-def list_notes(filter_str: str = None):
+def list_notes(filter_str: str = None, status: str = None, symbol: str = None):
     ensure_notes_dir()
-    notes = sorted(NOTES_DIR.glob("*.md"), reverse=True)
+
+    # Use the new metadata store for rich listing (v0.1)
+    notes = list_notes_meta(status=status, symbol=symbol)
+
+    # Optional simple text filter on filename
     if filter_str:
-        notes = [n for n in notes if filter_str.lower() in n.name.lower()]
+        notes = [n for n in notes if filter_str.lower() in n.get("id", "").lower()]
 
     if not notes:
         print("No notes found.")
         return
 
-    print(f"Found {len(notes)} notes:")
-    for note in notes:
-        print(f"  {note.name}")
+    print(f"Found {len(notes)} notes:\n")
+    for n in notes:
+        status_icon = {
+            "idea": "💡",
+            "paper": "📝",
+            "closed": "✅",
+        }.get(n.get("status"), "•")
+
+        pnl = n.get("pnl", {})
+        pnl_str = ""
+        if pnl.get("result"):
+            pnl_str = f" | {pnl['result'].upper()}"
+        elif pnl.get("entry"):
+            pnl_str = f" | entry:{pnl.get('entry')}"
+
+        tags = n.get("tags", [])
+        tags_str = f"  [{', '.join(tags)}]" if tags else ""
+
+        print(f"  {status_icon} {n['id']:<30}  {n.get('status','idea'):<7}  {n.get('symbol',''):<6} {n.get('timeframe',''):<4}{pnl_str}{tags_str}")
 
 
 def search_notes(query: str):
@@ -502,7 +544,9 @@ def main():
     p_new.add_argument("--date")
 
     p_list = sub.add_parser("list")
-    p_list.add_argument("--filter")
+    p_list.add_argument("--filter", help="Simple text filter on filename")
+    p_list.add_argument("--status", choices=["idea", "paper", "closed"], help="Filter by status")
+    p_list.add_argument("--symbol", help="Filter by symbol (e.g. BTC)")
 
     p_search = sub.add_parser("search")
     p_search.add_argument("query")
@@ -512,6 +556,24 @@ def main():
 
     p_templates = sub.add_parser("templates")
 
+    # === New v0.1 commands using the metadata store ===
+    p_stats = sub.add_parser("stats", help="Show statistics (win rate, counts, etc.)")
+
+    p_status = sub.add_parser("status", help="Change the status of a note")
+    p_status.add_argument("note_id", help="Note ID (e.g. 2026-05-29-BTC-4H)")
+    p_status.add_argument("new_status", choices=["idea", "paper", "closed"])
+
+    p_pnl = sub.add_parser("pnl", help="Set P&L data on a note")
+    p_pnl.add_argument("note_id")
+    p_pnl.add_argument("--entry", type=float)
+    p_pnl.add_argument("--exit", type=float)
+    p_pnl.add_argument("--rr", type=float)
+    p_pnl.add_argument("--result", choices=["win", "loss", "breakeven"])
+
+    p_tag = sub.add_parser("tag", help="Add a tag to a note")
+    p_tag.add_argument("note_id")
+    p_tag.add_argument("tag")
+
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--port", type=int, default=8765)
 
@@ -520,13 +582,38 @@ def main():
     if args.cmd == "new":
         create_note(args.template, args.symbol, args.timeframe, args.date)
     elif args.cmd == "list":
-        list_notes(args.filter)
+        list_notes(args.filter, status=getattr(args, "status", None), symbol=getattr(args, "symbol", None))
     elif args.cmd == "search":
         search_notes(args.query)
     elif args.cmd == "export":
         export_notes(args.format)
     elif args.cmd == "templates":
         print("\n".join(list_templates()))
+    elif args.cmd == "stats":
+        stats = get_stats()
+        print("\n=== Market Structure Notes — Stats ===")
+        print(f"Total notes:     {stats['total_notes']}")
+        print(f"By status:       {stats['by_status']}")
+        print(f"By symbol:       {stats['by_symbol']}")
+        print(f"By template:     {stats['by_template']}")
+        print(f"Closed notes:    {stats['closed_notes']}")
+        print(f"Wins / Losses:   {stats['wins']} / {stats['losses']}")
+        print(f"Win rate:        {stats['win_rate']}%\n")
+    elif args.cmd == "status":
+        meta = set_status(args.note_id, args.new_status)
+        print(f"Updated {args.note_id} → status={meta['status']}")
+    elif args.cmd == "pnl":
+        meta = update_pnl(
+            args.note_id,
+            entry=args.entry,
+            exit=args.exit,
+            rr=args.rr,
+            result=args.result,
+        )
+        print(f"Updated P&L for {args.note_id}: {meta['pnl']}")
+    elif args.cmd == "tag":
+        meta = add_tag(args.note_id, args.tag)
+        print(f"Added tag '{args.tag}' to {args.note_id}. Tags: {meta['tags']}")
     elif args.cmd == "serve":
         serve(args.port)
 

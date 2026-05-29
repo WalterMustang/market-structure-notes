@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "notes": {
+    "2026-05-29-BTC-4H": {
+      "id": "2026-05-29-BTC-4H",
+      "status": "paper",
+      "symbol": "BTC",
+      "timeframe": "4H",
+      "template": "",
+      "pnl": {
+        "entry": 105000.0,
+        "exit": 108500.0,
+        "rr": 2.1,
+        "result": "win"
+      },
+      "tags": [
+        "liquidity"
+      ],
+      "created_at": "2026-05-29T15:33:47.983553Z",
+      "updated_at": "2026-05-29T15:35:57.814252Z"
+    },
+    "2026-05-29-ETH-1D": {
+      "id": "2026-05-29-ETH-1D",
+      "status": "paper",
+      "symbol": "ETH",
+      "timeframe": "1D",
+      "template": "",
+      "pnl": {
+        "entry": 65000,
+        "exit": 67200,
+        "rr": 1.8,
+        "result": "win"
+      },
+      "tags": [
+        "liquidity"
+      ],
+      "created_at": "2026-05-29T15:33:47.983641Z",
+      "updated_at": "2026-05-29T15:33:47.988207Z"
+    }
+  }
+}
