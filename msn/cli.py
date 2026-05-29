@@ -190,23 +190,25 @@ def edit_note_cli(note_id: str):
     import os
     import subprocess
 
-    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
-    try:
-        subprocess.call([editor, str(path)])
-    except FileNotFoundError:
-        print(f"Editor '{editor}' not found. Falling back to simple edit.")
-        print(f"Current content of {path.name}:")
-        print(path.read_text())
-        print("\n--- Paste new full content (end with EOF) ---")
-        new_content = []
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+
+    if editor:
         try:
-            while True:
-                line = input()
-                new_content.append(line)
-        except EOFError:
+            subprocess.call([editor, str(path)])
+            print(f"Opened in {editor}")
+            return
+        except FileNotFoundError:
             pass
-        path.write_text("\n".join(new_content))
-        print("Saved.")
+
+    # Improved fallback for v0.2
+    print(f"\nNote file location:\n  {path}\n")
+    print("No $EDITOR set, or editor not found in PATH.")
+    print("Edit the file directly in your editor of choice, then come back.")
+    print("\nTip: You can also use:")
+    print(f"  code {path}        # VS Code")
+    print(f"  vim {path}")
+    print(f"  nano {path}")
+    print("\n(Or set EDITOR=code / vim / nano in your shell to make 'msn edit' use it automatically.)")
 
     # Touch the metadata updated_at
     set_note_meta(note_id.replace(".md", ""), updated_at=None)  # will set current time inside set_note_meta

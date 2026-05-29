@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The hash travels with the note in structured exports and metadata.
   - Lets you detect when a template has changed since a note was written. Old notes get an empty hash (acceptable for v0.2).
 
+### v0.2 Complete
+- Final polish: `msn edit` now gives clear file path + practical editor suggestions when $EDITOR is not set (removed fragile fallback input loop).
+- Note linking convention established and documented: write `[[2026-05-29-BTC-4H]]` in any note for cross-references. IDs are stable and human-readable.
+- v0.2 roadmap fully delivered. See ROADMAP.md for v0.3 ideas.
+
 ### Fixed
 - CI failure + runtime error when running `msn serve` or importing the web app: `python-multipart` was missing from the `[web]` optional dependencies. FastAPI's `Form(...)` requires it for route registration. Now explicitly declared so `pip install 'market-structure-notes[web]'` works correctly out of the box.
 - Improved error messages in `create_app()` and `serve()` to mention the full web extra and what it pulls in.

@@ -38,8 +38,10 @@ This is the public roadmap. It is intentionally small and focused.
   - Streaks (longest win/loss, current streak)
   - Best performing templates (scored by win% × avg RR, min sample size)
 
-### Remaining / Next
-- Improved `msn edit` experience and note linking (final v0.2 item)
+### v0.2 complete
+- Improved `msn edit` fallback (clear file path + editor suggestions when $EDITOR not set)
+- Note linking convention documented: use `[[NOTE-ID]]` in markdown for cross-references (human + future machine readable)
+- Template hash surfaced in `--verbose` list and structured exports (ties into the versioning work)
 
 ---
 
@@ -71,6 +73,6 @@ We prioritize based on real daily usage and paper trading evidence, not feature 
 
 ---
 
-**Current status**: v0.2.3 — Template versioning (simple) delivered. Only one item left for v0.2: improved `msn edit` UX + note linking.
+**Current status**: v0.2 complete (2026-05-29). All planned v0.2 items delivered: richer search, real analytics (streaks + best templates), structured export (JSON + Obsidian markdown), simple template versioning, improved edit UX + linking convention.
 
 See git history and CHANGELOG.md for exact changes.
