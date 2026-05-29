@@ -284,6 +284,68 @@ def get_stats() -> Dict[str, Any]:
     template_perf = _finalize_perf(template_perf)
     symbol_perf = _finalize_perf(symbol_perf)
 
+    # === v0.2 advanced review analytics ===
+    # Collect closed trades with result in chronological order for streaks + best setups
+    closed_trades = []
+    for n in notes:
+        if n.get("status") == "closed":
+            pnl = n.get("pnl", {}) or {}
+            result = pnl.get("result")
+            if result in ("win", "loss", "breakeven"):
+                closed_trades.append({
+                    "id": n.get("id"),
+                    "updated_at": n.get("updated_at", ""),
+                    "symbol": n.get("symbol", ""),
+                    "template": n.get("template", "") or "unknown",
+                    "result": result,
+                    "rr": pnl.get("rr"),
+                })
+
+    # Sort chronologically (oldest first) for streak calculation
+    closed_trades.sort(key=lambda x: x.get("updated_at", ""))
+
+    # Compute streaks
+    longest_win = 0
+    longest_loss = 0
+    current_streak = 0
+    current_type = None
+
+    for t in closed_trades:
+        if t["result"] == "win":
+            if current_type == "win":
+                current_streak += 1
+            else:
+                current_streak = 1
+                current_type = "win"
+            longest_win = max(longest_win, current_streak)
+        elif t["result"] == "loss":
+            if current_type == "loss":
+                current_streak += 1
+            else:
+                current_streak = 1
+                current_type = "loss"
+            longest_loss = max(longest_loss, current_streak)
+        else:  # breakeven breaks streaks
+            current_streak = 0
+            current_type = None
+
+    # Current streak is the last run (positive for win, negative for loss)
+    current_streak_value = current_streak if current_type == "win" else (-current_streak if current_type == "loss" else 0)
+
+    # Best performing templates (score = win_rate * avg_rr, require min 2 closed for ranking)
+    best_templates = []
+    for tpl, p in template_perf.items():
+        if p["closed"] >= 2 and p.get("avg_rr") is not None:
+            score = round(p["win_rate"] * p["avg_rr"], 2)
+            best_templates.append({
+                "template": tpl,
+                "closed": p["closed"],
+                "win_rate": p["win_rate"],
+                "avg_rr": p["avg_rr"],
+                "score": score,
+            })
+    best_templates.sort(key=lambda x: -x["score"])
+
     return {
         "total_notes": total,
         "by_status": by_status,
@@ -299,6 +361,14 @@ def get_stats() -> Dict[str, Any]:
             "avg_rr": avg_rr,
             "by_template": template_perf,
             "by_symbol": symbol_perf,
+        },
+        "review": {
+            "streaks": {
+                "longest_win": longest_win,
+                "longest_loss": longest_loss,
+                "current": current_streak_value,
+            },
+            "best_templates": best_templates[:5],  # top 5
         },
     }
 

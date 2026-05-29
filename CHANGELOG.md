@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `msn export --format markdown`: Exports every note as a clean Markdown file with real YAML frontmatter (id, status, symbol, timeframe, template, full pnl block, tags, timestamps). The resulting files drop straight into Obsidian, Logseq, or Notion with zero extra work.
+- Advanced review analytics in `msn stats`:
+  - Streaks: longest win streak, longest loss streak, current streak (calculated chronologically from closed trades)
+  - Best performing templates: ranked by simple score (win_rate × avg RR), requires min 2 closed trades for ranking. Top 5 shown.
 
 ### Fixed
 - CI failure + runtime error when running `msn serve` or importing the web app: `python-multipart` was missing from the `[web]` optional dependencies. FastAPI's `Form(...)` requires it for route registration. Now explicitly declared so `pip install 'market-structure-notes[web]'` works correctly out of the box.

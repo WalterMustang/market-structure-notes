@@ -975,6 +975,25 @@ def main():
                     rr_str = f" | avg RR {p['avg_rr']}" if p.get("avg_rr") else ""
                     print(f"  {sym:<6} {p['closed']:>2} closed  |  {p['win_rate']:>5.1f}% win{rr_str}")
                 print()
+
+            # === v0.2 advanced review analytics ===
+            review = stats.get("review", {})
+            streaks = review.get("streaks", {})
+            best = review.get("best_templates", [])
+
+            print("--- Review Analytics ---")
+            print(f"Longest win streak:  {streaks.get('longest_win', 0)}")
+            print(f"Longest loss streak: {streaks.get('longest_loss', 0)}")
+            curr = streaks.get("current", 0)
+            curr_str = f"+{curr}" if curr > 0 else str(curr)
+            print(f"Current streak:      {curr_str}  (positive = win streak)")
+            print()
+
+            if best:
+                print("--- Best Performing Templates (by score = win% × avg RR, min 2 trades) ---")
+                for b in best:
+                    print(f"  {b['template']:<18} {b['closed']:>2} trades  |  {b['win_rate']:>5.1f}%  |  avg RR {b['avg_rr']}  |  score {b['score']}")
+                print()
         else:
             print("No closed trades yet. Mark some notes as 'closed' with P&L to see performance analytics.\n")
     elif args.cmd == "status":
