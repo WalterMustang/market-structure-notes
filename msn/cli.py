@@ -42,6 +42,14 @@ def load_template(name: str) -> str:
     return path.read_text()
 
 
+def get_template_hash(name: str) -> str:
+    """Short hash of the template content at the moment the note was created.
+    Used for simple template versioning / drift detection in v0.2."""
+    import hashlib
+    content = load_template(name)
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+
 def substitute(template: str, values: dict) -> str:
     def replacer(match):
         key = match.group(1)
@@ -66,7 +74,7 @@ def create_note(template_name: str, symbol: str, timeframe: str, date_str: str =
     filepath = NOTES_DIR / filename
     filepath.write_text(content)
 
-    # Register in the metadata store (v0.1)
+    # Register in the metadata store (v0.1 + v0.2 template versioning)
     note_id = filename.replace(".md", "")
     set_note_meta(
         note_id,
@@ -74,13 +82,14 @@ def create_note(template_name: str, symbol: str, timeframe: str, date_str: str =
         symbol=symbol.upper(),
         timeframe=timeframe.upper(),
         template=template_name,
+        template_hash=get_template_hash(template_name),
     )
 
     print(f"Created: {filepath.relative_to(ROOT)}  (status=idea)")
     return filepath
 
 
-def list_notes(filter_str: str = None, status: str = None, symbol: str = None):
+def list_notes(filter_str: str = None, status: str = None, symbol: str = None, verbose: bool = False):
     ensure_notes_dir()
 
     # Use the new metadata store for rich listing (v0.1)
@@ -112,7 +121,11 @@ def list_notes(filter_str: str = None, status: str = None, symbol: str = None):
         tags = n.get("tags", [])
         tags_str = f"  [{', '.join(tags)}]" if tags else ""
 
-        print(f"  {status_icon} {n['id']:<30}  {n.get('status','idea'):<7}  {n.get('symbol',''):<6} {n.get('timeframe',''):<4}{pnl_str}{tags_str}")
+        hash_str = ""
+        if verbose and n.get("template_hash"):
+            hash_str = f"  h:{n['template_hash']}"
+
+        print(f"  {status_icon} {n['id']:<30}  {n.get('status','idea'):<7}  {n.get('symbol',''):<6} {n.get('timeframe',''):<4}{pnl_str}{tags_str}{hash_str}")
 
 
 def search_notes(query: str):
@@ -891,6 +904,7 @@ def main():
     p_list.add_argument("--filter", help="Simple text filter on filename")
     p_list.add_argument("--status", choices=["idea", "paper", "closed"], help="Filter by status")
     p_list.add_argument("--symbol", help="Filter by symbol (e.g. BTC)")
+    p_list.add_argument("--verbose", action="store_true", help="Show template hash (v0.2 template versioning)")
 
     p_search = sub.add_parser("search")
     p_search.add_argument("query")
@@ -930,7 +944,7 @@ def main():
     if args.cmd == "new":
         create_note(args.template, args.symbol, args.timeframe, args.date)
     elif args.cmd == "list":
-        list_notes(args.filter, status=getattr(args, "status", None), symbol=getattr(args, "symbol", None))
+        list_notes(args.filter, status=getattr(args, "status", None), symbol=getattr(args, "symbol", None), verbose=getattr(args, "verbose", False))
     elif args.cmd == "search":
         search_notes(args.query)
     elif args.cmd == "export":

@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Advanced review analytics in `msn stats`:
   - Streaks: longest win streak, longest loss streak, current streak (calculated chronologically from closed trades)
   - Best performing templates: ranked by simple score (win_rate × avg RR), requires min 2 closed trades for ranking. Top 5 shown.
+- Simple template versioning (v0.2):
+  - On note creation, `msn` now records `template_hash` (first 8 chars of SHA256 of the template content at that moment).
+  - `msn list --verbose` shows the hash for notes that have one.
+  - The hash travels with the note in structured exports and metadata.
+  - Lets you detect when a template has changed since a note was written. Old notes get an empty hash (acceptable for v0.2).
 
 ### Fixed
 - CI failure + runtime error when running `msn serve` or importing the web app: `python-multipart` was missing from the `[web]` optional dependencies. FastAPI's `Form(...)` requires it for route registration. Now explicitly declared so `pip install 'market-structure-notes[web]'` works correctly out of the box.

@@ -37,6 +37,7 @@ def _default_meta(note_id: str, symbol: str = "", timeframe: str = "", template:
         "symbol": symbol.upper() if symbol else "",
         "timeframe": timeframe.upper() if timeframe else "",
         "template": template,
+        "template_hash": "",   # v0.2 simple template versioning
         "pnl": {
             "entry": None,
             "exit": None,
@@ -137,7 +138,8 @@ def set_note_meta(note_id: str, **updates) -> Dict[str, Any]:
     for key, value in updates.items():
         if key == "pnl" and isinstance(value, dict):
             meta["pnl"].update(value)
-        elif key in meta:
+        else:
+            # Allow new keys (template_hash, future fields, etc.) without schema changes every time
             meta[key] = value
 
     meta["updated_at"] = _now()

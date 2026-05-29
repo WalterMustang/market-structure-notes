@@ -39,8 +39,7 @@ This is the public roadmap. It is intentionally small and focused.
   - Best performing templates (scored by win% × avg RR, min sample size)
 
 ### Remaining / Next
-- Template versioning (simple)
-- Improved `msn edit` experience and note linking
+- Improved `msn edit` experience and note linking (final v0.2 item)
 
 ---
 
@@ -72,6 +71,6 @@ We prioritize based on real daily usage and paper trading evidence, not feature 
 
 ---
 
-**Current status**: v0.2.2 — v0.1 complete. v0.2 fully delivered except final two polish items (template versioning + edit UX). Review analytics (streaks + best templates by score) now live.
+**Current status**: v0.2.3 — Template versioning (simple) delivered. Only one item left for v0.2: improved `msn edit` UX + note linking.
 
 See git history and CHANGELOG.md for exact changes.
