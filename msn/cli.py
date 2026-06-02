@@ -31,6 +31,22 @@ def ensure_notes_dir():
     NOTES_DIR.mkdir(exist_ok=True)
 
 
+def _safe_note_path(filename: str):
+    """Resolve a notes/ filename safely, or return None if it escapes notes/.
+
+    The web routes take ``filename`` straight from the URL path, so guard
+    against path traversal: only accept a plain ``*.md`` file living directly
+    inside ``notes/`` (no directory parts, no dotfiles, no ``..``).
+    """
+    name = Path(filename).name  # drop any directory components
+    if not name or name != filename or name.startswith(".") or Path(name).suffix != ".md":
+        return None
+    path = (NOTES_DIR / name).resolve()
+    if path.parent != NOTES_DIR.resolve():
+        return None
+    return path
+
+
 def list_templates():
     return sorted([p.stem for p in TEMPLATES_DIR.glob("*.md")])
 
@@ -614,8 +630,8 @@ def create_app():
 
     @app.get("/edit/{filename}", response_class=HTMLResponse)
     def edit_note(filename: str):
-        path = NOTES_DIR / filename
-        if not path.exists():
+        path = _safe_note_path(filename)
+        if path is None or not path.exists():
             return HTMLResponse("Note not found", status_code=404)
         
         content = path.read_text()
@@ -794,7 +810,9 @@ def create_app():
 
     @app.post("/save/{filename}")
     async def save_note(filename: str, content: str = Form(...)):
-        path = NOTES_DIR / filename
+        path = _safe_note_path(filename)
+        if path is None or not path.exists():
+            return HTMLResponse("Note not found", status_code=404)
         path.write_text(content)
         return RedirectResponse("/", status_code=303)
 
@@ -805,8 +823,8 @@ def create_app():
 
     @app.get("/delete/{filename}")
     async def delete_note(filename: str):
-        path = NOTES_DIR / filename
-        if path.exists():
+        path = _safe_note_path(filename)
+        if path and path.exists():
             path.unlink()
         return RedirectResponse("/", status_code=303)
 
