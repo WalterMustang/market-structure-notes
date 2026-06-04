@@ -9,8 +9,8 @@ aren't obvious from a first read.
 
 Market Structure Notes (`msn`) — a CLI + optional web tool for writing
 structured technical-analysis notes (Wyckoff, SMC/ICT, Price Action, etc.).
-Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.2.1 (verify in
-`pyproject.toml`).
+Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.3.0 (verify in
+`pyproject.toml`; `--version` reads `__version__` in `msn/__init__.py`, so bump both).
 
 ## Key paths
 
@@ -38,8 +38,9 @@ Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.2.1 (verify in
 
 ## Roadmap & extension
 
-- v0.1 and v0.2 are complete. v0.3 (sharing/community) is optional/later — don't
-  start it speculatively. Check `ROADMAP.md` + `CHANGELOG.md` for live status.
+- v0.1, v0.2, and v0.3 (correctness & durability) are complete. v0.4
+  (sharing/redaction) is optional/much later — don't start it speculatively. Check
+  `ROADMAP.md` + `CHANGELOG.md` for live status.
 - Where to extend (see AGENTS.md "Adding New Things"):
   - **Template** → drop a `.md` in `templates/`. No code change.
   - **Metadata field** → `_default_meta()` + `set_note_meta()` in `store.py`,
@@ -51,10 +52,11 @@ Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.2.1 (verify in
 
 ## Validation
 
-No automated test suite. The minimum gate is exactly what CI runs
-(`.github/workflows/ci.yml`, Python 3.10–3.12):
+A stdlib `unittest` suite lives in `tests/` (as of v0.3). Run it plus the smoke
+gate that CI runs (`.github/workflows/ci.yml`, Python 3.10–3.12):
 
 ```bash
+python -m unittest discover -s tests             # store/analytics/import tests
 msn --version && msn templates && msn stats
 python -c "from msn.cli import create_app; create_app()"   # web imports
 ```

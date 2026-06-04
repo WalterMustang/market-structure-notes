@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-06-04
+
+Correctness & durability. v0.2 shipped analytics that were subtly wrong and a
+metadata layer with no recovery story; this release fixes both.
+
+### Added
+- Completed trade data model: `pnl` now has `direction` (long/short), `stop`,
+  `target`, and `realized_r`; notes gain a `closed_at` timestamp. New fields are
+  additive and back-compatible (`_ensure_schema` backfills old records idempotently).
+- R derivation: realized R is computed from direction/entry/stop/exit, and planned
+  R:R from entry/stop/target. Manually entered values always take precedence.
+- `msn pnl` flags: `--direction`, `--stop`, `--target`, `--realized-r`. The web P&L
+  form gains the matching inputs.
+- Expectancy analytics in `msn stats`: expectancy (avg realized R per trade), avg
+  win R, avg loss R. "Best performing templates" now ranks by expectancy.
+- `msn import --from <dir>`: rebuilds/merges the metadata store from exported
+  Markdown frontmatter (read-only; never writes into `notes/`). Pairs with
+  `msn export --format markdown` as a full backup/restore path.
+- First automated test suite (`tests/`, stdlib `unittest`): schema/migration, R
+  derivation, expectancy, streak ordering, corrupt-store recovery, import round-trip.
+
+### Changed
+- `msn export --format markdown` frontmatter now includes direction/stop/target/
+  realized_r/closed_at, so exports are a complete backup.
+
+### Fixed
+- `avg_rr` averaged *planned* R:R across closed trades regardless of outcome (a
+  losing 3R plan counted as +3). It is now labelled "planned" and demoted below
+  expectancy as the headline.
+- Streaks ordered by note `updated_at`, so editing an old note silently re-ordered
+  win/loss chronology. They now order by `closed_at`.
+- A corrupt `.msn.json` was silently discarded. It is now backed up to
+  `.msn.json.corrupt-<timestamp>` with a warning, never lost unannounced.
+
+---
+
 ## [0.2.0] - 2026-05-29
 
 ### Added

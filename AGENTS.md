@@ -31,16 +31,26 @@ Current data model (see `msn/store.py` for exact implementation):
   "timeframe": "4H",
   "template": "wyckoff",
   "pnl": {
+    "direction": "long",       // long | short | null
     "entry": 105000,
+    "stop": 103000,            // planned invalidation
+    "target": 110000,          // planned target (optional)
     "exit": 108500,
-    "rr": 2.1,
+    "rr": 2.5,                 // planned R:R (auto-derived from entry/stop/target)
+    "realized_r": 1.75,        // realized R of the outcome (auto-derived; manual wins)
     "result": "win"            // win | loss | breakeven | null
   },
   "tags": ["liquidity"],
   "created_at": "...",
-  "updated_at": "..."
+  "updated_at": "...",
+  "closed_at": "..."           // stamped when status first becomes "closed"
 }
 ```
+
+`realized_r` is the honest performance metric (expectancy = mean of realized_r over
+closed trades). `rr`/`realized_r` are derived from the price fields when present, but
+any manually supplied value is never overwritten. Old records are backfilled with
+None defaults idempotently by `_ensure_schema()`.
 
 ## Development Workflow
 
@@ -89,12 +99,15 @@ Current data model (see `msn/store.py` for exact implementation):
 - Heavy web frameworks or databases
 - Turning this into a full trading platform
 
-## Current State (as of 2026-05-29)
+## Current State (as of 2026-06-04)
 
-- Version: 0.2.0
-- v0.1 complete (store + CLI + web + P&L + status)
-- v0.2 in progress: richer search + real performance analytics (by template & symbol) now working
-- Next priority: structured export (Obsidian/Notion friendly with frontmatter)
+- Version: 0.3.0
+- v0.1 + v0.2 complete (store + CLI + web + P&L + status + search + analytics + export)
+- v0.3 complete: completed trade data model (direction/stop/target/realized R +
+  `closed_at`), expectancy-first analytics, store backup-on-corrupt + `msn import`
+  recovery, first automated test suite (`tests/`, run with `python -m unittest discover -s tests`)
+- Next priority: none scheduled. v0.4 (sharing/redaction) is optional/much later —
+  don't start speculatively.
 
 ## Questions?
 

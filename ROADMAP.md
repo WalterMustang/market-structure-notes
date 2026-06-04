@@ -45,11 +45,45 @@ This is the public roadmap. It is intentionally small and focused.
 
 ---
 
-## v0.3 — Sharing & community (optional, later)
+## v0.3 — Correctness & durability (Complete)
 
-- Public read-only note viewer (self-hosted or static)
-- One-click publish to X / AgentX (with proper redaction)
-- Template gallery (community contributions)
+**Goal**: Make the numbers honest and the metadata recoverable. v0.2 shipped
+analytics that were subtly wrong and a metadata layer with no backup story; this
+lane fixes both before adding more surface.
+
+### Delivered
+- **Trade data model completed**: `pnl` now carries `direction` (long/short),
+  `stop`, `target`, and `realized_r`, plus a real `closed_at` on the note. The tool
+  *derives* realized R and planned R:R from price/stop instead of trusting a typed-in
+  number.
+- **Expectancy-first analytics**: `msn stats` now leads with expectancy
+  (avg realized R per trade) and avg win/loss R. Best setups are ranked by
+  expectancy, not the old `win% × planned_rr` score.
+- **Durable + recoverable store**: a corrupt `.msn.json` is backed up
+  (`.msn.json.corrupt-<ts>`) and warned about instead of silently wiped. New
+  `msn import --from <dir>` rebuilds/merges the store from exported Markdown
+  frontmatter (read-only; never writes into `notes/`).
+- **First automated tests**: a stdlib `unittest` suite covers schema/migration,
+  R derivation, expectancy, streak ordering, and the import round-trip.
+
+### Bugs fixed (were shipped as "features" in v0.2)
+- `avg_rr` averaged *planned* R:R across closed trades regardless of outcome — a
+  losing 3R plan still counted as +3. It is now clearly labelled "planned" and is
+  no longer the headline metric.
+- Streaks ordered by note `updated_at`, so editing an old note silently re-ordered
+  your win/loss chronology. They now order by `closed_at`.
+
+---
+
+## v0.4 — Sharing & community (optional, much later)
+
+- **Redaction engine** (the reusable, locally-valuable half — build first if anything):
+  strip size/account/identifying detail from a note for safe sharing.
+- Public read-only note viewer (self-hosted or static).
+- Template gallery (community contributions).
+- *Questioned / much later:* social "publish to X / AgentX". Leans against the
+  local-first, no-cloud-sync spirit; only worth it once the redaction engine exists
+  and there's real demand.
 
 ---
 
@@ -73,6 +107,9 @@ We prioritize based on real daily usage and paper trading evidence, not feature 
 
 ---
 
-**Current status**: v0.2 complete (2026-05-29). All planned v0.2 items delivered: richer search, real analytics (streaks + best templates), structured export (JSON + Obsidian markdown), simple template versioning, improved edit UX + linking convention.
+**Current status**: v0.3 complete (2026-06-04). Correctness & durability: completed
+trade data model (direction/stop/target/realized R + `closed_at`), expectancy-first
+analytics, store backup-on-corrupt + `msn import` recovery, and the first automated
+test suite. Fixed the v0.2 `avg_rr` inflation and streak-ordering bugs.
 
 See git history and CHANGELOG.md for exact changes.

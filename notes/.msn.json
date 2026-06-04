@@ -11,13 +11,19 @@
         "entry": 105000,
         "exit": 108500,
         "rr": 2.1,
-        "result": "win"
+        "result": "win",
+        "direction": null,
+        "stop": null,
+        "target": null,
+        "realized_r": null
       },
       "tags": [
         "liquidity"
       ],
       "created_at": "2026-05-29T15:43:09.169984Z",
-      "updated_at": "2026-05-29T15:43:15.298888Z"
+      "updated_at": "2026-05-29T15:43:15.298888Z",
+      "template_hash": "",
+      "closed_at": null
     },
     "2026-05-29-ETH-1D": {
       "id": "2026-05-29-ETH-1D",
@@ -29,13 +35,19 @@
         "entry": 65000,
         "exit": 67200,
         "rr": 1.8,
-        "result": "win"
+        "result": "win",
+        "direction": null,
+        "stop": null,
+        "target": null,
+        "realized_r": null
       },
       "tags": [
         "liquidity"
       ],
       "created_at": "2026-05-29T15:43:09.170091Z",
-      "updated_at": "2026-05-29T15:43:15.302461Z"
+      "updated_at": "2026-05-29T15:43:15.302461Z",
+      "template_hash": "",
+      "closed_at": null
     }
   }
 }

@@ -47,7 +47,7 @@ Then open http://localhost:8765 — the web viewer now shows status, P&L, tags, 
 
 - **Templates**: Wyckoff, SMC, Price Action, Minimal, Volume Profile, Macro, Session, and more
 - **Rich metadata**: Every note has status (idea/paper/closed), P&L fields, and tags
-- **CLI**: `new`, `list` (filter by status/symbol), `stats`, `status`, `pnl`, `tag`, `edit`, `search`, `serve`
+- **CLI**: `new`, `list` (filter by status/symbol), `stats`, `status`, `pnl`, `tag`, `edit`, `search`, `export`, `import`, `serve`
 - **Web viewer**: Rich cards with status badges, P&L summary, tags + quick status/P&L editing from browser
 - **Extensible**: Drop any `.md` file in `templates/` — the CLI discovers it automatically
 - **Export**: JSON + zip bundles for Obsidian, Notion, or backup
@@ -85,7 +85,8 @@ Good first issues are labeled `good first issue`.
 
 See [ROADMAP.md](ROADMAP.md) for planned work.
 
-v0.1 is complete (data layer, CLI, web upgrades, P&L tracking). See ROADMAP.md for v0.2+.
+v0.1–v0.3 are complete (data layer, CLI, web, P&L, search, analytics, export +
+expectancy/realized-R analytics and store recovery via `import`). See ROADMAP.md for what's next.
 - Better CLI commands
 - Cleaner web viewer
 
