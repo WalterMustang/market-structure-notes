@@ -30,6 +30,19 @@ def _now() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
+def _default_pnl() -> Dict[str, Any]:
+    return {
+        "direction": None,   # long / short
+        "entry": None,
+        "stop": None,        # planned invalidation
+        "target": None,      # planned target (optional)
+        "exit": None,
+        "rr": None,          # planned R:R (auto-derivable from entry/stop/target)
+        "realized_r": None,  # realized R multiple of the outcome
+        "result": None,      # win / loss / breakeven
+    }
+
+
 def _default_meta(note_id: str, symbol: str = "", timeframe: str = "", template: str = "") -> Dict[str, Any]:
     return {
         "id": note_id,
@@ -38,16 +51,67 @@ def _default_meta(note_id: str, symbol: str = "", timeframe: str = "", template:
         "timeframe": timeframe.upper() if timeframe else "",
         "template": template,
         "template_hash": "",   # v0.2 simple template versioning
-        "pnl": {
-            "entry": None,
-            "exit": None,
-            "rr": None,
-            "result": None,   # win / loss / breakeven
-        },
+        "pnl": _default_pnl(),
         "tags": [],
         "created_at": _now(),
         "updated_at": _now(),
+        "closed_at": None,     # set when the trade is actually closed
     }
+
+
+def _ensure_schema(meta: Dict[str, Any]) -> bool:
+    """Idempotently backfill any missing keys (top-level + pnl) with None defaults.
+
+    Never overwrites existing values, so old records keep their data. Returns True
+    if anything was added (so callers can decide whether to persist).
+    """
+    changed = False
+    defaults = _default_meta(meta.get("id", ""))
+    for key, value in defaults.items():
+        if key == "pnl":
+            continue
+        if key not in meta:
+            meta[key] = value
+            changed = True
+
+    pnl = meta.setdefault("pnl", {})
+    for key, value in _default_pnl().items():
+        if key not in pnl:
+            pnl[key] = value
+            changed = True
+
+    return changed
+
+
+def _derive_r(pnl: Dict[str, Any]) -> None:
+    """Fill planned rr and realized_r from entry/stop/exit/target when derivable.
+
+    Manual values always win — we only fill fields that are currently None.
+    """
+    direction = pnl.get("direction")
+    entry = pnl.get("entry")
+    stop = pnl.get("stop")
+    exit_ = pnl.get("exit")
+    target = pnl.get("target")
+
+    def _num(x):
+        return x if isinstance(x, (int, float)) else None
+
+    entry, stop, exit_, target = _num(entry), _num(stop), _num(exit_), _num(target)
+    if entry is None or stop is None:
+        return
+
+    risk = abs(entry - stop)
+    if risk == 0:
+        return
+
+    sign = 1 if direction == "long" else (-1 if direction == "short" else None)
+
+    if pnl.get("realized_r") is None and exit_ is not None and sign is not None:
+        pnl["realized_r"] = round(sign * (exit_ - entry) / risk, 2)
+
+    if pnl.get("rr") is None and target is not None:
+        pnl["rr"] = round(abs(target - entry) / risk, 2)
 
 
 def load_store() -> Dict[str, Any]:
@@ -63,7 +127,19 @@ def load_store() -> Dict[str, Any]:
             data["notes"] = {}
         return data
     except Exception:
-        # Corrupt file — start fresh but don't delete user notes
+        # Corrupt file — never silently discard. Back it up with a timestamp and
+        # warn so the user can recover (or rebuild via `msn import`).
+        backup = STORE_FILE.with_name(
+            STORE_FILE.name + ".corrupt-" + datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        )
+        try:
+            STORE_FILE.rename(backup)
+            print(
+                f"WARNING: {STORE_FILE.name} was unreadable. Backed up to {backup.name}. "
+                f"Starting a fresh store (rebuild with `msn import --from <dir>`)."
+            )
+        except Exception:
+            print(f"WARNING: {STORE_FILE.name} was unreadable and could not be backed up.")
         return {"version": 1, "notes": {}}
 
 
@@ -73,8 +149,16 @@ def save_store(data: Dict[str, Any]) -> None:
 
 
 def _migrate_existing_notes(store: Dict[str, Any]) -> int:
-    """Auto-create minimal metadata for any .md files that don't have records yet."""
+    """Auto-create minimal metadata for any .md files that don't have records yet,
+    and backfill the schema on existing records (idempotent)."""
     migrated = 0
+
+    # Backfill schema on existing records so old notes gain new fields safely.
+    schema_changed = False
+    for meta in store["notes"].values():
+        if _ensure_schema(meta):
+            schema_changed = True
+
     for md_file in NOTES_DIR.glob("*.md"):
         note_id = md_file.stem
         if note_id in store["notes"]:
@@ -115,7 +199,7 @@ def _migrate_existing_notes(store: Dict[str, Any]) -> int:
         store["notes"][note_id] = meta
         migrated += 1
 
-    if migrated > 0:
+    if migrated > 0 or schema_changed:
         save_store(store)
     return migrated
 
@@ -135,6 +219,7 @@ def set_note_meta(note_id: str, **updates) -> Dict[str, Any]:
         store["notes"][note_id] = _default_meta(note_id)
 
     meta = store["notes"][note_id]
+    _ensure_schema(meta)
     for key, value in updates.items():
         if key == "pnl" and isinstance(value, dict):
             meta["pnl"].update(value)
@@ -142,6 +227,7 @@ def set_note_meta(note_id: str, **updates) -> Dict[str, Any]:
             # Allow new keys (template_hash, future fields, etc.) without schema changes every time
             meta[key] = value
 
+    _derive_r(meta["pnl"])
     meta["updated_at"] = _now()
     save_store(store)
     return meta
@@ -199,7 +285,10 @@ def get_stats() -> Dict[str, Any]:
     wins = 0
     losses = 0
     breakevens = 0
-    rr_values: List[float] = []
+    rr_values: List[float] = []           # planned R:R
+    realized_values: List[float] = []     # realized R (the honest metric)
+    win_r_values: List[float] = []
+    loss_r_values: List[float] = []
 
     # Per-template performance (only closed)
     template_perf: Dict[str, Dict[str, Any]] = {}
@@ -227,6 +316,7 @@ def get_stats() -> Dict[str, Any]:
             pnl = n.get("pnl", {}) or {}
             result = pnl.get("result")
             rr = pnl.get("rr")
+            realized = pnl.get("realized_r")
 
             if result == "win":
                 wins += 1
@@ -237,50 +327,55 @@ def get_stats() -> Dict[str, Any]:
 
             if isinstance(rr, (int, float)):
                 rr_values.append(float(rr))
-
-            # Template performance
-            if tpl not in template_perf:
-                template_perf[tpl] = {"closed": 0, "wins": 0, "losses": 0, "breakevens": 0, "rrs": []}
-            template_perf[tpl]["closed"] += 1
-            if result == "win":
-                template_perf[tpl]["wins"] += 1
-            elif result == "loss":
-                template_perf[tpl]["losses"] += 1
-            elif result == "breakeven":
-                template_perf[tpl]["breakevens"] += 1
-            if isinstance(rr, (int, float)):
-                template_perf[tpl]["rrs"].append(float(rr))
-
-            # Symbol performance
-            if sym and sym not in symbol_perf:
-                symbol_perf[sym] = {"closed": 0, "wins": 0, "losses": 0, "breakevens": 0, "rrs": []}
-            if sym:
-                symbol_perf[sym]["closed"] += 1
+            if isinstance(realized, (int, float)):
+                realized_values.append(float(realized))
                 if result == "win":
-                    symbol_perf[sym]["wins"] += 1
+                    win_r_values.append(float(realized))
                 elif result == "loss":
-                    symbol_perf[sym]["losses"] += 1
+                    loss_r_values.append(float(realized))
+
+            def _accum(d: Dict[str, Dict[str, Any]], k: str):
+                if k not in d:
+                    d[k] = {"closed": 0, "wins": 0, "losses": 0, "breakevens": 0, "rrs": [], "realized": []}
+                p = d[k]
+                p["closed"] += 1
+                if result == "win":
+                    p["wins"] += 1
+                elif result == "loss":
+                    p["losses"] += 1
                 elif result == "breakeven":
-                    symbol_perf[sym]["breakevens"] += 1
+                    p["breakevens"] += 1
                 if isinstance(rr, (int, float)):
-                    symbol_perf[sym]["rrs"].append(float(rr))
+                    p["rrs"].append(float(rr))
+                if isinstance(realized, (int, float)):
+                    p["realized"].append(float(realized))
+
+            _accum(template_perf, tpl)
+            if sym:
+                _accum(symbol_perf, sym)
+
+    def _mean(xs: List[float]) -> Optional[float]:
+        return round(sum(xs) / len(xs), 2) if xs else None
 
     # Calculate overall metrics
     total_closed_with_result = wins + losses + breakevens
     overall_win_rate = round((wins / total_closed_with_result * 100), 1) if total_closed_with_result > 0 else 0.0
-    avg_rr = round(sum(rr_values) / len(rr_values), 2) if rr_values else None
+    avg_rr = _mean(rr_values)              # average *planned* R:R (kept for reference)
+    expectancy = _mean(realized_values)   # average *realized* R per trade — the edge
+    avg_win_r = _mean(win_r_values)
+    avg_loss_r = _mean(loss_r_values)
 
     # Post-process template and symbol performance
     def _finalize_perf(d: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         for key, p in d.items():
             closed = p["closed"]
             w = p["wins"]
-            wr = round((w / closed * 100), 1) if closed > 0 else 0.0
-            rrs = p["rrs"]
-            avg = round(sum(rrs) / len(rrs), 2) if rrs else None
-            p["win_rate"] = wr
-            p["avg_rr"] = avg
-            p.pop("rrs", None)  # clean up raw list
+            p["win_rate"] = round((w / closed * 100), 1) if closed > 0 else 0.0
+            p["avg_rr"] = _mean(p["rrs"])
+            p["expectancy"] = _mean(p["realized"])
+            p["realized_count"] = len(p["realized"])
+            p.pop("rrs", None)       # clean up raw lists
+            p.pop("realized", None)
         return d
 
     template_perf = _finalize_perf(template_perf)
@@ -296,7 +391,8 @@ def get_stats() -> Dict[str, Any]:
             if result in ("win", "loss", "breakeven"):
                 closed_trades.append({
                     "id": n.get("id"),
-                    "updated_at": n.get("updated_at", ""),
+                    # Order by when the trade actually closed; fall back to last edit.
+                    "closed_at": n.get("closed_at") or n.get("updated_at", ""),
                     "symbol": n.get("symbol", ""),
                     "template": n.get("template", "") or "unknown",
                     "result": result,
@@ -304,7 +400,7 @@ def get_stats() -> Dict[str, Any]:
                 })
 
     # Sort chronologically (oldest first) for streak calculation
-    closed_trades.sort(key=lambda x: x.get("updated_at", ""))
+    closed_trades.sort(key=lambda x: x.get("closed_at", ""))
 
     # Compute streaks
     longest_win = 0
@@ -334,19 +430,20 @@ def get_stats() -> Dict[str, Any]:
     # Current streak is the last run (positive for win, negative for loss)
     current_streak_value = current_streak if current_type == "win" else (-current_streak if current_type == "loss" else 0)
 
-    # Best performing templates (score = win_rate * avg_rr, require min 2 closed for ranking)
+    # Best performing templates, ranked by expectancy (avg realized R per trade).
+    # Require at least 2 trades with a realized R so the ranking means something.
     best_templates = []
     for tpl, p in template_perf.items():
-        if p["closed"] >= 2 and p.get("avg_rr") is not None:
-            score = round(p["win_rate"] * p["avg_rr"], 2)
+        if p.get("realized_count", 0) >= 2 and p.get("expectancy") is not None:
             best_templates.append({
                 "template": tpl,
                 "closed": p["closed"],
+                "trades_scored": p["realized_count"],
                 "win_rate": p["win_rate"],
                 "avg_rr": p["avg_rr"],
-                "score": score,
+                "expectancy": p["expectancy"],
             })
-    best_templates.sort(key=lambda x: -x["score"])
+    best_templates.sort(key=lambda x: -x["expectancy"])
 
     return {
         "total_notes": total,
@@ -361,6 +458,10 @@ def get_stats() -> Dict[str, Any]:
             "breakevens": breakevens,
             "win_rate": overall_win_rate,
             "avg_rr": avg_rr,
+            "expectancy": expectancy,
+            "avg_win_r": avg_win_r,
+            "avg_loss_r": avg_loss_r,
+            "realized_count": len(realized_values),
             "by_template": template_perf,
             "by_symbol": symbol_perf,
         },
@@ -375,14 +476,32 @@ def get_stats() -> Dict[str, Any]:
     }
 
 
-def update_pnl(note_id: str, entry: Any = None, exit: Any = None, rr: Any = None, result: Optional[str] = None) -> Dict[str, Any]:
+def update_pnl(
+    note_id: str,
+    entry: Any = None,
+    exit: Any = None,
+    rr: Any = None,
+    result: Optional[str] = None,
+    direction: Optional[str] = None,
+    stop: Any = None,
+    target: Any = None,
+    realized_r: Any = None,
+) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
+    if direction is not None:
+        updates["direction"] = direction
     if entry is not None:
         updates["entry"] = entry
+    if stop is not None:
+        updates["stop"] = stop
+    if target is not None:
+        updates["target"] = target
     if exit is not None:
         updates["exit"] = exit
     if rr is not None:
         updates["rr"] = rr
+    if realized_r is not None:
+        updates["realized_r"] = realized_r
     if result is not None:
         updates["result"] = result
 
@@ -393,7 +512,15 @@ def set_status(note_id: str, status: str) -> Dict[str, Any]:
     valid = {"idea", "paper", "closed"}
     if status not in valid:
         raise ValueError(f"Invalid status. Must be one of: {valid}")
-    return set_note_meta(note_id, status=status)
+
+    updates: Dict[str, Any] = {"status": status}
+    # Stamp the actual close time once, so streak ordering reflects when the trade
+    # closed rather than when the note was last edited.
+    if status == "closed":
+        existing = get_note_meta(note_id)
+        if not existing or not existing.get("closed_at"):
+            updates["closed_at"] = _now()
+    return set_note_meta(note_id, **updates)
 
 
 def add_tag(note_id: str, tag: str) -> Dict[str, Any]:

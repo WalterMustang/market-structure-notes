@@ -23,7 +23,10 @@ from msn.store import (
     set_note_meta,
     get_note_meta,
     load_store,
+    save_store,
     _migrate_existing_notes,
+    _ensure_schema,
+    _derive_r,
 )
 
 
@@ -313,16 +316,12 @@ def _build_yaml_frontmatter(meta: dict) -> str:
 
     # P&L block
     pnl = meta.get("pnl", {}) or {}
-    if any(pnl.get(k) is not None for k in ("entry", "exit", "rr", "result")):
+    pnl_keys = ("direction", "entry", "stop", "target", "exit", "rr", "realized_r", "result")
+    if any(pnl.get(k) is not None for k in pnl_keys):
         lines.append("pnl:")
-        if pnl.get("entry") is not None:
-            lines.append(f"  entry: {pnl['entry']}")
-        if pnl.get("exit") is not None:
-            lines.append(f"  exit: {pnl['exit']}")
-        if pnl.get("rr") is not None:
-            lines.append(f"  rr: {pnl['rr']}")
-        if pnl.get("result"):
-            lines.append(f"  result: {pnl['result']}")
+        for k in pnl_keys:
+            if pnl.get(k) is not None:
+                lines.append(f"  {k}: {pnl[k]}")
 
     # Tags
     tags = meta.get("tags", [])
@@ -336,9 +335,107 @@ def _build_yaml_frontmatter(meta: dict) -> str:
         lines.append(f"created_at: {meta['created_at']}")
     if meta.get("updated_at"):
         lines.append(f"updated_at: {meta['updated_at']}")
+    if meta.get("closed_at"):
+        lines.append(f"closed_at: {meta['closed_at']}")
 
     lines.append("---")
     return "\n".join(lines)
+
+
+def _coerce_scalar(value: str):
+    """Turn a frontmatter scalar string into int/float where it round-trips cleanly."""
+    v = value.strip()
+    if v == "":
+        return ""
+    try:
+        i = int(v)
+        return i
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        return v
+
+
+def _parse_frontmatter(text: str) -> dict:
+    """Parse the YAML subset that _build_yaml_frontmatter emits. Zero deps.
+
+    Handles top-level `key: value`, a nested `pnl:` block, and a `tags:` list.
+    Anything outside that shape is ignored, so it stays tolerant.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+
+    meta: dict = {}
+    section = None  # None | "pnl" | "tags"
+    for raw in lines[1:]:
+        if raw.strip() == "---":
+            break
+        indented = raw[:1] in (" ", "\t")
+        stripped = raw.strip()
+        if not stripped:
+            continue
+
+        if not indented:
+            section = None
+            if stripped == "pnl:":
+                meta["pnl"] = {}
+                section = "pnl"
+            elif stripped == "tags:":
+                meta["tags"] = []
+                section = "tags"
+            elif ":" in stripped:
+                key, _, val = stripped.partition(":")
+                meta[key.strip()] = _coerce_scalar(val)
+        else:
+            if section == "tags" and stripped.startswith("-"):
+                meta.setdefault("tags", []).append(stripped[1:].strip())
+            elif section == "pnl" and ":" in stripped:
+                key, _, val = stripped.partition(":")
+                meta.setdefault("pnl", {})[key.strip()] = _coerce_scalar(val)
+
+    return meta
+
+
+def import_notes(from_dir: str) -> None:
+    """Rebuild/merge the metadata store from Markdown files with frontmatter.
+
+    Reads only — never writes into notes/. Merges idempotently: a record is skipped
+    when the store already has a newer (or equal) updated_at, so re-running is safe.
+    """
+    src = Path(from_dir)
+    if not src.is_dir():
+        print(f"Import source not found or not a directory: {from_dir}")
+        return
+
+    store = load_store()
+    # Note: we deliberately do NOT migrate here. Migration would recreate fresh
+    # default records (updated_at=now) for the still-present .md files, which would
+    # then look "newer" than the frontmatter and block the very recovery we want.
+
+    imported = 0
+    skipped = 0
+    for md_file in sorted(src.glob("*.md")):
+        meta = _parse_frontmatter(md_file.read_text())
+        note_id = meta.get("id") or md_file.stem
+        if not meta:
+            continue
+        meta["id"] = note_id
+        _ensure_schema(meta)
+        _derive_r(meta.get("pnl", {}))
+
+        existing = store["notes"].get(note_id)
+        if existing and existing.get("updated_at", "") >= meta.get("updated_at", ""):
+            skipped += 1
+            continue
+
+        store["notes"][note_id] = meta
+        imported += 1
+
+    save_store(store)
+    print(f"Imported {imported} note(s), skipped {skipped} (store had same-or-newer). Source: {from_dir}")
 
 
 def create_app():
@@ -662,6 +759,9 @@ def create_app():
         sel_win = "selected" if res == "win" else ""
         sel_loss = "selected" if res == "loss" else ""
         sel_be  = "selected" if res == "breakeven" else ""
+        direction = pnl.get("direction") or ""
+        sel_long = "selected" if direction == "long" else ""
+        sel_short = "selected" if direction == "short" else ""
 
         html = f"""
         <div class="max-w-7xl">
@@ -690,8 +790,24 @@ def create_app():
             <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 mb-6">
                 <form method="post" action="/set-pnl/{note_id}" class="flex flex-wrap items-end gap-3 text-sm">
                     <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Direction</label>
+                        <select name="direction" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm">
+                            <option value="">—</option>
+                            <option value="long" {sel_long}>long</option>
+                            <option value="short" {sel_short}>short</option>
+                        </select>
+                    </div>
+                    <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Entry</label>
                         <input type="text" name="entry" value="{pnl.get('entry') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Stop</label>
+                        <input type="text" name="stop" value="{pnl.get('stop') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Target</label>
+                        <input type="text" name="target" value="{pnl.get('target') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Exit</label>
@@ -700,6 +816,10 @@ def create_app():
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">R:R</label>
                         <input type="text" name="rr" value="{pnl.get('rr') or ''}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] text-zinc-500 mb-0.5">Realized R</label>
+                        <input type="text" name="realized_r" value="{pnl.get('realized_r') or ''}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Result</label>
@@ -838,12 +958,26 @@ def create_app():
         return RedirectResponse("/", status_code=303)
 
     @app.post("/set-pnl/{note_id}")
-    async def set_pnl_web(note_id: str, entry: str = Form(""), exit: str = Form(""), rr: str = Form(""), result: str = Form("")):
+    async def set_pnl_web(
+        note_id: str,
+        direction: str = Form(""),
+        entry: str = Form(""),
+        stop: str = Form(""),
+        target: str = Form(""),
+        exit: str = Form(""),
+        rr: str = Form(""),
+        realized_r: str = Form(""),
+        result: str = Form(""),
+    ):
         try:
             updates = {}
-            if entry: updates["entry"] = float(entry) if entry else None
-            if exit:  updates["exit"]  = float(exit) if exit else None
-            if rr:    updates["rr"]    = float(rr) if rr else None
+            if direction: updates["direction"] = direction
+            if entry: updates["entry"] = float(entry)
+            if stop:  updates["stop"]  = float(stop)
+            if target: updates["target"] = float(target)
+            if exit:  updates["exit"]  = float(exit)
+            if rr:    updates["rr"]    = float(rr)
+            if realized_r: updates["realized_r"] = float(realized_r)
             if result: updates["result"] = result or None
             update_pnl(note_id, **updates)
         except Exception as e:
@@ -944,9 +1078,14 @@ def main():
 
     p_pnl = sub.add_parser("pnl", help="Set P&L data on a note")
     p_pnl.add_argument("note_id")
+    p_pnl.add_argument("--direction", choices=["long", "short"])
     p_pnl.add_argument("--entry", type=float)
+    p_pnl.add_argument("--stop", type=float, help="Planned invalidation (used to derive R)")
+    p_pnl.add_argument("--target", type=float, help="Planned target (used to derive planned R:R)")
     p_pnl.add_argument("--exit", type=float)
-    p_pnl.add_argument("--rr", type=float)
+    p_pnl.add_argument("--rr", type=float, help="Planned R:R (auto-derived from stop/target if omitted)")
+    p_pnl.add_argument("--realized-r", type=float, dest="realized_r",
+                       help="Realized R multiple (auto-derived from direction/entry/stop/exit if omitted)")
     p_pnl.add_argument("--result", choices=["win", "loss", "breakeven"])
 
     p_tag = sub.add_parser("tag", help="Add a tag to a note")
@@ -955,6 +1094,10 @@ def main():
 
     p_edit = sub.add_parser("edit", help="Edit a note in your $EDITOR (or fallback)")
     p_edit.add_argument("note_id", help="Note ID (e.g. 2026-05-29-BTC-4H)")
+
+    p_import = sub.add_parser("import", help="Rebuild/merge the metadata store from exported Markdown frontmatter")
+    p_import.add_argument("--from", dest="from_dir", required=True,
+                          help="Directory of .md files with YAML frontmatter (e.g. export/markdown)")
 
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--port", type=int, default=8765)
@@ -975,7 +1118,7 @@ def main():
         stats = get_stats()
         perf = stats.get("performance", {})
 
-        print("\n=== Market Structure Notes — Stats (v0.2 analytics) ===\n")
+        print("\n=== Market Structure Notes — Stats (v0.3 analytics) ===\n")
 
         # High level counts
         print(f"Total notes:      {stats['total_notes']}")
@@ -987,27 +1130,40 @@ def main():
 
         # Overall performance
         if stats['closed_notes'] > 0:
+            def _perf_line(p):
+                exp = p.get("expectancy")
+                exp_str = f" | exp {exp:+.2f}R" if exp is not None else ""
+                rr_str = f" | planned RR {p['avg_rr']}" if p.get("avg_rr") is not None else ""
+                return f"{p['win_rate']:>5.1f}% win{exp_str}{rr_str}"
+
             print("--- Closed Trade Performance ---")
             print(f"Wins / Losses / BE:  {perf['wins']} / {perf['losses']} / {perf['breakevens']}")
             print(f"Win rate:            {perf['win_rate']}%")
+            if perf.get("expectancy") is not None:
+                print(f"Expectancy:          {perf['expectancy']:+.2f}R per trade  "
+                      f"(over {perf.get('realized_count', 0)} trades with realized R)")
+                if perf.get("avg_win_r") is not None:
+                    print(f"Avg win:             {perf['avg_win_r']:+.2f}R")
+                if perf.get("avg_loss_r") is not None:
+                    print(f"Avg loss:            {perf['avg_loss_r']:+.2f}R")
+            else:
+                print("Expectancy:          n/a  (add direction/entry/stop/exit to derive realized R)")
             if perf.get("avg_rr") is not None:
-                print(f"Average R:R:         {perf['avg_rr']}")
+                print(f"Avg planned R:R:     {perf['avg_rr']}")
             print()
 
             # By template performance
             if perf.get("by_template"):
                 print("--- Performance by Template ---")
                 for tpl, p in sorted(perf["by_template"].items(), key=lambda x: -x[1]["closed"]):
-                    rr_str = f" | avg RR {p['avg_rr']}" if p.get("avg_rr") else ""
-                    print(f"  {tpl:<18} {p['closed']:>2} closed  |  {p['win_rate']:>5.1f}% win{rr_str}")
+                    print(f"  {tpl:<18} {p['closed']:>2} closed  |  {_perf_line(p)}")
                 print()
 
             # By symbol performance
             if perf.get("by_symbol"):
                 print("--- Performance by Symbol ---")
                 for sym, p in sorted(perf["by_symbol"].items(), key=lambda x: -x[1]["closed"]):
-                    rr_str = f" | avg RR {p['avg_rr']}" if p.get("avg_rr") else ""
-                    print(f"  {sym:<6} {p['closed']:>2} closed  |  {p['win_rate']:>5.1f}% win{rr_str}")
+                    print(f"  {sym:<6} {p['closed']:>2} closed  |  {_perf_line(p)}")
                 print()
 
             # === v0.2 advanced review analytics ===
@@ -1024,9 +1180,10 @@ def main():
             print()
 
             if best:
-                print("--- Best Performing Templates (by score = win% × avg RR, min 2 trades) ---")
+                print("--- Best Performing Templates (by expectancy, min 2 trades with realized R) ---")
                 for b in best:
-                    print(f"  {b['template']:<18} {b['closed']:>2} trades  |  {b['win_rate']:>5.1f}%  |  avg RR {b['avg_rr']}  |  score {b['score']}")
+                    print(f"  {b['template']:<18} {b['trades_scored']:>2} scored  |  "
+                          f"{b['win_rate']:>5.1f}% win  |  exp {b['expectancy']:+.2f}R")
                 print()
         else:
             print("No closed trades yet. Mark some notes as 'closed' with P&L to see performance analytics.\n")
@@ -1036,9 +1193,13 @@ def main():
     elif args.cmd == "pnl":
         meta = update_pnl(
             args.note_id,
+            direction=args.direction,
             entry=args.entry,
+            stop=args.stop,
+            target=args.target,
             exit=args.exit,
             rr=args.rr,
+            realized_r=args.realized_r,
             result=args.result,
         )
         print(f"Updated P&L for {args.note_id}: {meta['pnl']}")
@@ -1047,6 +1208,8 @@ def main():
         print(f"Added tag '{args.tag}' to {args.note_id}. Tags: {meta['tags']}")
     elif args.cmd == "edit":
         edit_note_cli(args.note_id)
+    elif args.cmd == "import":
+        import_notes(args.from_dir)
     elif args.cmd == "serve":
         serve(args.port)
 
