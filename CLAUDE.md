@@ -26,6 +26,27 @@ Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.3.0 (verify in
   Do **not** edit it for current work, despite `project.yaml` still pointing at
   it as `entry`. If you're touching CLI behavior, it's `msn/cli.py`.
 
+## CLI surface
+
+The 12 subcommands wired up in `main()` in `cli.py` (each also runs via
+`python -m msn <cmd>` — see `msn/__main__.py`). Keep `--help` text in sync when
+you touch any of them:
+
+- `new --template <t> --symbol <s> --timeframe <tf> [--date]` — create a note
+- `list [--filter] [--status idea|paper|closed] [--symbol] [--verbose]`
+- `search <query>` — searches metadata + content
+- `export --format {json|structured|markdown}` (markdown = YAML frontmatter,
+  Obsidian/Notion-ready; pairs with `import`)
+- `templates` — list discovered templates
+- `stats` — counts + expectancy-first closed-trade analytics
+- `status <note_id> <idea|paper|closed>`
+- `pnl <note_id> [--direction --entry --stop --target --exit --rr --realized-r --result]`
+- `tag <note_id> <tag>`
+- `edit <note_id>` — open in `$EDITOR` (prints path + suggestions if unset)
+- `import --from <dir>` — rebuild/merge store from exported markdown frontmatter
+  (read-only; never writes into `notes/`)
+- `serve [--port 8765]` — web viewer (needs the `[web]` extra)
+
 ## How to work here
 
 - Smallest useful change first. Audit-first, minimal diffs; preserve original
@@ -52,8 +73,10 @@ Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.3.0 (verify in
 
 ## Validation
 
-A stdlib `unittest` suite lives in `tests/` (as of v0.3). Run it plus the smoke
-gate that CI runs (`.github/workflows/ci.yml`, Python 3.10–3.12):
+A stdlib `unittest` suite lives in `tests/` (as of v0.3): `test_store.py`
+(schema/migration, R derivation, corrupt-store recovery), `test_stats.py`
+(expectancy + streak ordering), `test_io.py` (export→import round-trip). Run it
+plus the smoke gate that CI runs (`.github/workflows/ci.yml`, Python 3.10–3.12):
 
 ```bash
 python -m unittest discover -s tests             # store/analytics/import tests
