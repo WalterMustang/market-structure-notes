@@ -25,6 +25,30 @@ Local-first, pure-stdlib core, Python ≥3.10. Current version: 0.3.0 (verify in
 - `scripts/msn.py` — **legacy v1.0.0 standalone (no store, json-only export).**
   Do **not** edit it for current work, despite `project.yaml` still pointing at
   it as `entry`. If you're touching CLI behavior, it's `msn/cli.py`.
+- `tests/` — stdlib `unittest` suite (see Validation).
+- `examples/` — sample filled-in notes (reference only; not read by the code).
+- `preview/server.py` — thin Starchild preview wrapper around `create_app()`
+  (uvicorn on port 8000). Not the user-facing entrypoint; `msn serve` is.
+- Docs: `AGENTS.md` (source of truth), `ROADMAP.md`, `CHANGELOG.md` (Keep a
+  Changelog + SemVer), `CONTRIBUTING.md`, `README.md`. `PROJECT.md` and
+  `project.yaml` are stale v1.0.0 listing metadata.
+
+## Notes, IDs & templates
+
+- Note ID = filename stem: `YYYY-MM-DD-SYMBOL-TIMEFRAME` (symbol/timeframe
+  upper-cased by `create_note()`), e.g. `2026-05-29-BTC-4H`. Store keys, CLI
+  `<note_id>` args, and web routes all use this ID.
+- `msn new` writes with `write_text()` — an existing note with the same
+  date/symbol/timeframe is **overwritten** silently. Be aware when testing
+  against the real `notes/`.
+- Templates use `{{date}}`, `{{symbol}}`, `{{timeframe}}` (`substitute()` in
+  `cli.py`); unknown placeholders are left as-is. A short sha256 of the template
+  is stored as `template_hash` at creation for drift detection.
+- Cross-reference convention: `[[NOTE-ID]]` inside note markdown.
+- Paths are anchored to the repo, not the CWD: both `cli.py` and `store.py`
+  define `ROOT = Path(__file__).parent.parent` and their **own** `NOTES_DIR`.
+  Tests isolate by patching `store.NOTES_DIR` / `store.STORE_FILE`; anything
+  exercising `cli.py` file I/O must also patch `cli.NOTES_DIR` (and `ROOT`).
 
 ## CLI surface
 
@@ -75,7 +99,8 @@ you touch any of them:
 
 A stdlib `unittest` suite lives in `tests/` (as of v0.3): `test_store.py`
 (schema/migration, R derivation, corrupt-store recovery), `test_stats.py`
-(expectancy + streak ordering), `test_io.py` (export→import round-trip). Run it
+(expectancy + streak ordering), `test_io.py` (export→import round-trip) — 18
+tests as of v0.3.0. New store/analytics logic should come with a test there. Run it
 plus the smoke gate that CI runs (`.github/workflows/ci.yml`, Python 3.10–3.12):
 
 ```bash
@@ -85,7 +110,9 @@ python -c "from msn.cli import create_app; create_app()"   # web imports
 ```
 
 For web-viewer changes also run `msn serve` (default http://localhost:8765) and
-click through. Run the gate before claiming a change works.
+click through. Run the gate before claiming a change works. Smoke commands run
+against the real `notes/` and may migrate/update `notes/.msn.json` — check
+`git status` and don't commit incidental changes to user notes or the store.
 
 ```bash
 pip install -e .            # core (no deps)
@@ -99,6 +126,11 @@ pip install -e '.[web]'     # add FastAPI/Uvicorn for `msn serve`
   safe and idempotent.
 - Keep the web viewer's file routes path-traversal safe — route user-supplied
   filenames through `_safe_note_path()` in `cli.py`; never open raw paths.
+- Web viewer lives entirely in `create_app()` (FastAPI imported lazily, so the
+  core stays dependency-free). Routes: `/`, `/templates`, `/edit/{filename}`,
+  `/save/{filename}`, `/create`, `/delete/{filename}` (a state-changing GET —
+  known quirk, don't "fix" it uninvited), `/set-status/{note_id}`,
+  `/set-pnl/{note_id}`, `/export/json`, `/export/all`.
 - Known legacy debt: `scripts/msn.py` and `project.yaml` still describe the old
   v1.0.0 tool. Leave it unless explicitly asked — don't scope-creep.
 - Docs drift (version, template count) across files. Owner values honest docs:
