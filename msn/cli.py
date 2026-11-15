@@ -5,7 +5,10 @@ Market Structure Notes (MSN) - CLI + optional web viewer.
 
 import argparse
 import json
+import math
 import re
+from html import escape as _esc
+from urllib.parse import quote as _q
 from datetime import datetime
 from pathlib import Path
 
@@ -50,15 +53,31 @@ def _safe_note_path(filename: str):
     return path
 
 
+# Symbols/timeframes become part of the note filename, so keep them to a
+# filename-safe charset (no path separators, no "..", no HTML metacharacters).
+_NOTE_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.]{0,31}$")
+# Full note IDs (filename stems) accepted from untrusted input (web, import).
+_NOTE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _valid_note_part(value: str) -> bool:
+    return bool(_NOTE_PART_RE.match(value or "")) and ".." not in value
+
+
+def _valid_note_id(note_id: str) -> bool:
+    return bool(_NOTE_ID_RE.match(note_id or "")) and ".." not in note_id
+
+
 def list_templates():
     return sorted([p.stem for p in TEMPLATES_DIR.glob("*.md")])
 
 
 def load_template(name: str) -> str:
-    path = TEMPLATES_DIR / f"{name}.md"
-    if not path.exists():
+    # Only allow discovered template names — `name` can come from a web form, and
+    # a raw path join would let "../x" read arbitrary .md files.
+    if name not in list_templates():
         raise FileNotFoundError(f"Template '{name}' not found")
-    return path.read_text()
+    return (TEMPLATES_DIR / f"{name}.md").read_text()
 
 
 def get_template_hash(name: str) -> str:
@@ -80,6 +99,13 @@ def create_note(template_name: str, symbol: str, timeframe: str, date_str: str =
     ensure_notes_dir()
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
+    else:
+        datetime.strptime(date_str, "%Y-%m-%d")  # raises ValueError on bad input
+    for label, value in (("symbol", symbol), ("timeframe", timeframe)):
+        if not _valid_note_part(value):
+            raise ValueError(
+                f"Invalid {label} {value!r}: use letters, digits, '_' or '.' (max 32 chars)."
+            )
 
     template = load_template(template_name)
     values = {
@@ -419,8 +445,12 @@ def import_notes(from_dir: str) -> None:
     skipped = 0
     for md_file in sorted(src.glob("*.md")):
         meta = _parse_frontmatter(md_file.read_text())
-        note_id = meta.get("id") or md_file.stem
+        note_id = str(meta.get("id") or md_file.stem)
         if not meta:
+            continue
+        if not _valid_note_id(note_id):
+            print(f"Skipping {md_file.name}: unsafe note id {note_id!r}")
+            skipped += 1
             continue
         meta["id"] = note_id
         _ensure_schema(meta)
@@ -438,11 +468,55 @@ def import_notes(from_dir: str) -> None:
     print(f"Imported {imported} note(s), skipped {skipped} (store had same-or-newer). Source: {from_dir}")
 
 
-def create_app():
-    """Create the FastAPI web viewer app (reusable for CLI and previews)."""
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _host_only(value: str) -> str:
+    """Strip the port from a Host-style value ("[::1]:8765" -> "::1")."""
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
+def _request_allowed(method: str, path: str, headers, allowed_hosts) -> bool:
+    """Reject DNS-rebinding and cross-site (CSRF) requests to the local viewer.
+
+    The viewer has no login, so the browser is the trust boundary:
+    - Host must be one we serve as (blocks DNS rebinding, which would otherwise
+      let any website read /export/json). ``allowed_hosts=None`` disables this.
+    - State-changing requests (POSTs and the GET /delete route) must not come
+      from another site: Sec-Fetch-Site and Origin are checked when present.
+    """
+    host = headers.get("host", "")
+    if allowed_hosts is not None and _host_only(host) not in allowed_hosts:
+        return False
+
+    if method.upper() in _UNSAFE_METHODS or path.startswith("/delete/"):
+        if headers.get("sec-fetch-site", "") in ("cross-site", "same-site"):
+            return False
+        origin = headers.get("origin")
+        if origin is not None:
+            if origin == "null":
+                return False
+            netloc = origin.split("://", 1)[-1]
+            if netloc.lower() != host.lower():
+                return False
+    return True
+
+
+def create_app(allowed_hosts=LOOPBACK_HOSTS):
+    """Create the FastAPI web viewer app (reusable for CLI and previews).
+
+    ``allowed_hosts``: Host header values (without port) the app answers to.
+    Defaults to loopback names; pass ``None`` to skip the Host check (e.g. when
+    deliberately served behind a proxy or on a LAN address).
+    """
     try:
         from fastapi import FastAPI, Form
-        from fastapi.responses import HTMLResponse, RedirectResponse
+        from fastapi import Request
+        from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
         from jinja2 import Template
     except ImportError:
         raise RuntimeError(
@@ -452,6 +526,24 @@ def create_app():
         )
 
     app = FastAPI(title="Market Structure Notes")
+    hosts = None if allowed_hosts is None else frozenset(h.lower() for h in allowed_hosts)
+
+    @app.middleware("http")
+    async def security_guard(request: Request, call_next):
+        if not _request_allowed(request.method, request.url.path, request.headers, hosts):
+            return PlainTextResponse("Forbidden", status_code=403)
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
+
+    def _note_exists(note_id: str) -> bool:
+        if not _valid_note_id(note_id):
+            return False
+        path = _safe_note_path(f"{note_id}.md")
+        return path is not None and path.exists()
 
     BASE_HTML = """
     <!DOCTYPE html>
@@ -575,7 +667,7 @@ def create_app():
         if status:
             active_filters.append(f"status:{status}")
         if active_filters:
-            filter_pill = f'<a href="/" class="inline-flex items-center gap-1 px-3 py-1 bg-white text-zinc-950 text-xs rounded-full font-medium">Filtering: {" + ".join(active_filters)} <span class="text-zinc-500">×</span></a>'
+            filter_pill = f'<a href="/" class="inline-flex items-center gap-1 px-3 py-1 bg-white text-zinc-950 text-xs rounded-full font-medium">Filtering: {_esc(" + ".join(active_filters))} <span class="text-zinc-500">×</span></a>'
 
         # Symbol pills (clickable)
         symbol_pills = ""
@@ -583,7 +675,7 @@ def create_app():
             pills = []
             for sym in sorted(all_symbols):
                 active = "bg-white text-zinc-950" if sym == symbol else "bg-zinc-800 hover:bg-zinc-700"
-                pills.append(f'<a href="/?symbol={sym}{"&status="+status if status else ""}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{sym}</a>')
+                pills.append(f'<a href="/?symbol={_esc(_q(sym))}{"&amp;status="+_esc(_q(status)) if status else ""}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{_esc(sym)}</a>')
             symbol_pills = "".join(pills)
 
         # Status filter pills (new in v0.1)
@@ -594,12 +686,13 @@ def create_app():
         for st in status_options:
             active = "bg-white text-zinc-950" if st == status else "bg-zinc-800 hover:bg-zinc-700"
             href = f"/?status={st}"
-            if symbol: href += f"&symbol={symbol}"
+            if symbol: href += f"&amp;symbol={_esc(_q(symbol))}"
             st_pills.append(f'<a href="{href}" class="px-3 py-1 text-xs rounded-full {active} transition-colors">{status_labels[st]}</a>')
         status_pills = "".join(st_pills)
         
         # Use real stats from store (v0.1)
         store_stats = get_stats()
+        perf = store_stats["performance"]
 
         stats_html = f"""
         <div class="grid grid-cols-4 gap-4 mb-6">
@@ -617,7 +710,7 @@ def create_app():
             </div>
             <div class="bg-zinc-900 rounded-3xl p-6">
                 <div class="text-sm text-zinc-500">Win Rate (closed)</div>
-                <div class="text-4xl font-semibold mt-1">{store_stats['win_rate']}% <span class="text-sm text-zinc-500">({store_stats['wins']}W / {store_stats['losses']}L)</span></div>
+                <div class="text-4xl font-semibold mt-1">{perf['win_rate']}% <span class="text-sm text-zinc-500">({perf['wins']}W / {perf['losses']}L)</span></div>
             </div>
         </div>
         {f'<div class="mb-4">{filter_pill}</div>' if filter_pill else ''}
@@ -626,9 +719,9 @@ def create_app():
         search_html = f"""
         <div class="mb-6 flex gap-3">
             <form method="get" class="flex-1 flex gap-2">
-                <input type="text" name="q" value="{q}" placeholder="Search notes..." 
+                <input type="text" name="q" value="{_esc(q)}" placeholder="Search notes..." 
                        class="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-3 text-sm focus:outline-none focus:border-zinc-700">
-                {f'<input type="hidden" name="symbol" value="{symbol}">' if symbol else ''}
+                {f'<input type="hidden" name="symbol" value="{_esc(symbol)}">' if symbol else ''}
                 <button type="submit" class="px-5 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-2xl text-sm font-medium">Search</button>
             </form>
             <button onclick="showCreateModal()" 
@@ -648,7 +741,8 @@ def create_app():
         notes_html = ""
         if meta_notes:
             for m in meta_notes:
-                nid = m['id']
+                nid = _esc(m['id'])
+                nid_url = _esc(_q(m['id']))
                 status = m.get('status', 'idea')
                 status_badge = {
                     'idea': '<span class="px-2 py-0.5 text-[10px] rounded-full bg-amber-900/60 text-amber-300">IDEA</span>',
@@ -660,41 +754,41 @@ def create_app():
                 pnl_html = ""
                 if pnl.get('result'):
                     color = "text-emerald-400" if pnl['result'] == 'win' else ("text-red-400" if pnl['result'] == 'loss' else "text-zinc-400")
-                    pnl_html = f'<span class="{color} text-xs font-medium">{pnl["result"].upper()}</span> R:R {pnl.get("rr", "?")}'
+                    pnl_html = f'<span class="{color} text-xs font-medium">{_esc(str(pnl["result"]).upper())}</span> R:R {_esc(str(pnl.get("rr", "?")))}'
                 elif pnl.get('entry'):
-                    pnl_html = f'<span class="text-xs text-zinc-400">entry {pnl.get("entry")}</span>'
+                    pnl_html = f'<span class="text-xs text-zinc-400">entry {_esc(str(pnl.get("entry")))}</span>'
 
                 tags_html = ""
                 if m.get('tags'):
-                    tags_html = " ".join([f'<span class="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">#{t}</span>' for t in m['tags']])
+                    tags_html = " ".join([f'<span class="text-[10px] px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">#{_esc(str(t))}</span>' for t in m['tags']])
 
                 notes_html += f"""
                 <div class="note-card bg-zinc-900 border border-zinc-800 rounded-3xl p-5 mb-3 hover:border-zinc-700">
                     <div class="flex items-start justify-between mb-2">
-                        <a href="/edit/{nid}.md" class="font-mono text-sm text-white hover:underline">{nid}</a>
+                        <a href="/edit/{nid_url}.md" class="font-mono text-sm text-white hover:underline">{nid}</a>
                         <div class="flex items-center gap-2">
                             {status_badge}
-                            <a href="/edit/{nid}.md" class="text-[10px] px-2 py-0.5 bg-zinc-950 hover:bg-zinc-800 rounded text-zinc-400">edit</a>
+                            <a href="/edit/{nid_url}.md" class="text-[10px] px-2 py-0.5 bg-zinc-950 hover:bg-zinc-800 rounded text-zinc-400">edit</a>
                         </div>
                     </div>
 
                     <div class="flex items-center gap-3 text-xs mb-3">
-                        <span class="text-zinc-400">{m.get('symbol','')} {m.get('timeframe','')}</span>
+                        <span class="text-zinc-400">{_esc(str(m.get('symbol','')))} {_esc(str(m.get('timeframe','')))}</span>
                         {pnl_html}
                         {tags_html}
                     </div>
 
                     <!-- Quick status actions (v0.1) -->
                     <div class="flex gap-1.5 mb-2">
-                        <form method="post" action="/set-status/{nid}" class="inline">
+                        <form method="post" action="/set-status/{nid_url}" class="inline">
                             <input type="hidden" name="status" value="idea">
                             <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-amber-900/40 hover:bg-amber-900/70 text-amber-300">Idea</button>
                         </form>
-                        <form method="post" action="/set-status/{nid}" class="inline">
+                        <form method="post" action="/set-status/{nid_url}" class="inline">
                             <input type="hidden" name="status" value="paper">
                             <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-blue-900/40 hover:bg-blue-900/70 text-blue-300">Paper</button>
                         </form>
-                        <form method="post" action="/set-status/{nid}" class="inline">
+                        <form method="post" action="/set-status/{nid_url}" class="inline">
                             <input type="hidden" name="status" value="closed">
                             <button type="submit" class="text-[10px] px-2 py-0.5 rounded bg-emerald-900/40 hover:bg-emerald-900/70 text-emerald-300">Closed</button>
                         </form>
@@ -717,8 +811,8 @@ def create_app():
             preview = tpl_content[:320] + "..." if len(tpl_content) > 320 else tpl_content
             html += f"""
             <div class="mb-4 bg-zinc-900 border border-zinc-800 rounded-3xl p-5">
-                <div class="font-medium mb-2">{t}</div>
-                <pre class="text-xs text-zinc-400 whitespace-pre-wrap font-mono">{preview}</pre>
+                <div class="font-medium mb-2">{_esc(t)}</div>
+                <pre class="text-xs text-zinc-400 whitespace-pre-wrap font-mono">{_esc(preview)}</pre>
             </div>
             """
         html += "</div>"
@@ -732,7 +826,9 @@ def create_app():
             return HTMLResponse("Note not found", status_code=404)
         
         content = path.read_text()
-        note_id = filename.replace(".md", "")
+        note_id = path.stem
+        e_id = _esc(_q(note_id))
+        e_file = _esc(_q(filename))
 
         # Pull metadata (v0.1)
         meta = get_note_meta(note_id) or {"status": "idea", "pnl": {}, "tags": []}
@@ -743,16 +839,16 @@ def create_app():
             "idea": '<span class="px-3 py-1 text-sm rounded-full bg-amber-900/60 text-amber-300">IDEA</span>',
             "paper": '<span class="px-3 py-1 text-sm rounded-full bg-blue-900/60 text-blue-300">PAPER</span>',
             "closed": '<span class="px-3 py-1 text-sm rounded-full bg-emerald-900/60 text-emerald-300">CLOSED</span>',
-        }.get(status, status)
+        }.get(status, _esc(str(status)))
 
         pnl_display = ""
         if pnl.get("result"):
             color = "emerald" if pnl["result"] == "win" else ("red" if pnl["result"] == "loss" else "zinc")
-            pnl_display = f'<span class="text-{color}-400 font-medium">{pnl["result"].upper()}</span>  |  R:R {pnl.get("rr", "-")}  |  entry {pnl.get("entry", "-")} → exit {pnl.get("exit", "-")}'
+            pnl_display = f'<span class="text-{color}-400 font-medium">{_esc(str(pnl["result"]).upper())}</span>  |  R:R {_esc(str(pnl.get("rr", "-")))}  |  entry {_esc(str(pnl.get("entry", "-")))} → exit {_esc(str(pnl.get("exit", "-")))}'
         elif pnl.get("entry"):
-            pnl_display = f'entry {pnl.get("entry")} (no exit yet)'
+            pnl_display = f'entry {_esc(str(pnl.get("entry")))} (no exit yet)'
 
-        tags_display = " ".join([f'<span class="text-xs px-2 py-0.5 bg-zinc-800 rounded">#{t}</span>' for t in meta.get("tags", [])]) or '<span class="text-xs text-zinc-500">no tags</span>'
+        tags_display = " ".join([f'<span class="text-xs px-2 py-0.5 bg-zinc-800 rounded">#{_esc(str(t))}</span>' for t in meta.get("tags", [])]) or '<span class="text-xs text-zinc-500">no tags</span>'
 
         # Pre-compute selected options for P&L form
         res = pnl.get("result") or ""
@@ -778,7 +874,7 @@ def create_app():
                 </div>
                 <div class="flex-1"></div>
                 <div class="flex items-center gap-2 text-xs">
-                    <form method="post" action="/set-status/{note_id}" class="flex gap-1">
+                    <form method="post" action="/set-status/{e_id}" class="flex gap-1">
                         <button name="status" value="idea" class="px-2 py-0.5 rounded bg-amber-900/50 hover:bg-amber-900/80">Idea</button>
                         <button name="status" value="paper" class="px-2 py-0.5 rounded bg-blue-900/50 hover:bg-blue-900/80">Paper</button>
                         <button name="status" value="closed" class="px-2 py-0.5 rounded bg-emerald-900/50 hover:bg-emerald-900/80">Closed</button>
@@ -788,7 +884,7 @@ def create_app():
 
             <!-- Quick P&L form (v0.1) -->
             <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-4 mb-6">
-                <form method="post" action="/set-pnl/{note_id}" class="flex flex-wrap items-end gap-3 text-sm">
+                <form method="post" action="/set-pnl/{e_id}" class="flex flex-wrap items-end gap-3 text-sm">
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Direction</label>
                         <select name="direction" class="bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm">
@@ -799,27 +895,27 @@ def create_app():
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Entry</label>
-                        <input type="text" name="entry" value="{pnl.get('entry') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="entry" value="{_esc(str(pnl.get('entry') or ''))}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Stop</label>
-                        <input type="text" name="stop" value="{pnl.get('stop') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="stop" value="{_esc(str(pnl.get('stop') or ''))}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Target</label>
-                        <input type="text" name="target" value="{pnl.get('target') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="target" value="{_esc(str(pnl.get('target') or ''))}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Exit</label>
-                        <input type="text" name="exit" value="{pnl.get('exit') or ''}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="exit" value="{_esc(str(pnl.get('exit') or ''))}" class="w-28 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">R:R</label>
-                        <input type="text" name="rr" value="{pnl.get('rr') or ''}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="rr" value="{_esc(str(pnl.get('rr') or ''))}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Realized R</label>
-                        <input type="text" name="realized_r" value="{pnl.get('realized_r') or ''}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
+                        <input type="text" name="realized_r" value="{_esc(str(pnl.get('realized_r') or ''))}" class="w-20 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div>
                         <label class="block text-[10px] text-zinc-500 mb-0.5">Result</label>
@@ -836,7 +932,7 @@ def create_app():
 
             <div class="flex items-center justify-between mb-6">
                 <div>
-                    <div class="font-mono text-sm text-zinc-500">{filename}</div>
+                    <div class="font-mono text-sm text-zinc-500">{_esc(filename)}</div>
                     <div class="text-3xl font-semibold tracking-tight">Edit Note</div>
                 </div>
                 <div class="flex items-center gap-3">
@@ -846,7 +942,7 @@ def create_app():
                 </div>
             </div>
 
-            <form method="post" action="/save/{filename}" id="editForm">
+            <form method="post" action="/save/{e_file}" id="editForm">
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <!-- Editor -->
                     <div>
@@ -856,7 +952,7 @@ def create_app():
                         </div>
                         <textarea id="editor" name="content" 
                                   class="w-full h-[620px] bg-zinc-900 border border-zinc-800 rounded-3xl p-6 font-mono text-sm leading-relaxed focus:outline-none focus:border-zinc-700 resize-y"
-                                  oninput="updatePreview()">{content}</textarea>
+                                  oninput="updatePreview()">{_esc(content)}</textarea>
                     </div>
 
                     <!-- Live Preview -->
@@ -889,12 +985,19 @@ def create_app():
             </div>
         </div>
 
-        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+                integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi"
+                crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js"
+                integrity="sha384-qJNkHwhlYywDHfyoEe1np+1lYvX/8x+3gHCKFhSSBMQyCFlvFnn+zXmaebXl21rV"
+                crossorigin="anonymous"></script>
         <script>
             function updatePreview() {{
                 const source = document.getElementById('editor').value;
                 const preview = document.getElementById('preview');
-                preview.innerHTML = marked.parse(source);
+                // Notes can contain raw HTML (e.g. imported from elsewhere), so
+                // sanitize before injecting into the page.
+                preview.innerHTML = DOMPurify.sanitize(marked.parse(source));
             }}
             
             function confirmDelete() {{
@@ -908,7 +1011,7 @@ def create_app():
             }}
             
             function performDelete() {{
-                window.location.href = '/delete/{filename}';
+                window.location.href = '/delete/{e_file}';
             }}
             
             // Initial render
@@ -938,7 +1041,10 @@ def create_app():
 
     @app.post("/create")
     async def create_from_web(template: str = Form(...), symbol: str = Form(...), timeframe: str = Form(...)):
-        create_note(template, symbol, timeframe)
+        try:
+            create_note(template, symbol, timeframe)
+        except (ValueError, FileNotFoundError) as e:
+            return PlainTextResponse(str(e), status_code=400)
         return RedirectResponse("/", status_code=303)
 
     @app.get("/delete/{filename}")
@@ -951,6 +1057,8 @@ def create_app():
     # === v0.1: Status & P&L updates from web ===
     @app.post("/set-status/{note_id}")
     async def set_status_web(note_id: str, status: str = Form(...)):
+        if not _note_exists(note_id):
+            return HTMLResponse("Note not found", status_code=404)
         try:
             set_status(note_id, status)
         except Exception as e:
@@ -969,20 +1077,34 @@ def create_app():
         realized_r: str = Form(""),
         result: str = Form(""),
     ):
+        if not _note_exists(note_id):
+            return HTMLResponse("Note not found", status_code=404)
+
+        def _finite(raw: str) -> float:
+            value = float(raw)
+            if not math.isfinite(value):
+                raise ValueError(f"not a finite number: {raw!r}")
+            return value
+
         try:
+            # Same choices the CLI enforces via argparse.
+            if direction and direction not in ("long", "short"):
+                raise ValueError(f"invalid direction: {direction!r}")
+            if result and result not in ("win", "loss", "breakeven"):
+                raise ValueError(f"invalid result: {result!r}")
             updates = {}
             if direction: updates["direction"] = direction
-            if entry: updates["entry"] = float(entry)
-            if stop:  updates["stop"]  = float(stop)
-            if target: updates["target"] = float(target)
-            if exit:  updates["exit"]  = float(exit)
-            if rr:    updates["rr"]    = float(rr)
-            if realized_r: updates["realized_r"] = float(realized_r)
+            if entry: updates["entry"] = _finite(entry)
+            if stop:  updates["stop"]  = _finite(stop)
+            if target: updates["target"] = _finite(target)
+            if exit:  updates["exit"]  = _finite(exit)
+            if rr:    updates["rr"]    = _finite(rr)
+            if realized_r: updates["realized_r"] = _finite(realized_r)
             if result: updates["result"] = result or None
             update_pnl(note_id, **updates)
         except Exception as e:
             print(f"P&L update error: {e}")
-        return RedirectResponse(f"/edit/{note_id}.md", status_code=303)
+        return RedirectResponse(f"/edit/{_q(note_id)}.md", status_code=303)
 
     # === Export routes (v1.0) ===
     @app.get("/export/json")
@@ -1026,8 +1148,12 @@ def create_app():
     return app
 
 
-def serve(port: int = 8765):
-    """Start the web viewer (thin wrapper around create_app)."""
+def serve(port: int = 8765, host: str = "127.0.0.1"):
+    """Start the web viewer (thin wrapper around create_app).
+
+    Binds to loopback by default: the viewer has no authentication, so exposing
+    it on a network interface gives anyone who can reach it full read/write.
+    """
     try:
         import uvicorn
     except ImportError:
@@ -1035,9 +1161,18 @@ def serve(port: int = 8765):
         print("This includes FastAPI + python-multipart (needed for the web forms).")
         return
 
-    app = create_app()
-    print(f"Starting web viewer on http://localhost:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    if host in ("0.0.0.0", "::", ""):
+        allowed = None  # any interface: we can't know which Host names are legit
+    else:
+        allowed = LOOPBACK_HOSTS | {host.lower()}
+    if host not in LOOPBACK_HOSTS:
+        print(f"WARNING: serving on {host!r} — the viewer has NO authentication; "
+              "anyone who can reach this address can read, edit and delete your notes.")
+
+    app = create_app(allowed_hosts=allowed)
+    shown = "localhost" if host in LOOPBACK_HOSTS else host
+    print(f"Starting web viewer on http://{shown}:{port}")
+    uvicorn.run(app, host=host, port=port)
 
 
 def main():
@@ -1101,11 +1236,17 @@ def main():
 
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("--port", type=int, default=8765)
+    p_serve.add_argument("--host", default="127.0.0.1",
+                         help="Interface to bind (default 127.0.0.1). The viewer has no auth — "
+                              "only use 0.0.0.0 on a network you trust.")
 
     args = parser.parse_args()
 
     if args.cmd == "new":
-        create_note(args.template, args.symbol, args.timeframe, args.date)
+        try:
+            create_note(args.template, args.symbol, args.timeframe, args.date)
+        except ValueError as e:
+            parser.error(str(e))
     elif args.cmd == "list":
         list_notes(args.filter, status=getattr(args, "status", None), symbol=getattr(args, "symbol", None), verbose=getattr(args, "verbose", False))
     elif args.cmd == "search":
@@ -1211,7 +1352,7 @@ def main():
     elif args.cmd == "import":
         import_notes(args.from_dir)
     elif args.cmd == "serve":
-        serve(args.port)
+        serve(args.port, args.host)
 
 
 if __name__ == "__main__":
