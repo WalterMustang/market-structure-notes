@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Security
+- Web viewer now binds to `127.0.0.1` by default (was `0.0.0.0`, exposing the
+  unauthenticated viewer to the whole network). New `msn serve --host` flag to opt
+  in to other interfaces, with a warning.
+- Host-header allowlist (loopback names by default) blocks DNS-rebinding reads of
+  notes from malicious websites.
+- Cross-site request checks (`Origin` / `Sec-Fetch-Site`) on every POST and on the
+  `GET /delete` route block CSRF. Same-origin use and non-browser clients are unaffected.
+- All dynamic values in web pages are HTML-escaped (fixes reflected XSS via `q` /
+  `symbol` / `status`, and stored XSS via note content, IDs, tags and P&L fields).
+- Markdown preview is sanitized with DOMPurify; `marked` is pinned with SRI.
+- `/create` and `msn new` validate template names (no path traversal) and
+  symbol/timeframe/date (filename-safe characters only).
+- `/set-status` and `/set-pnl` only accept existing notes; `direction`/`result`
+  must be valid choices and numbers must be finite.
+- `msn import` skips records whose frontmatter `id` is not a safe note ID.
+- Responses carry `X-Content-Type-Options`, `X-Frame-Options`, `frame-ancestors`
+  CSP and `Referrer-Policy` headers.
+
+### Fixed
+- Web index page crashed with HTTP 500 (`KeyError: 'win_rate'`): win-rate stats
+  live under `get_stats()["performance"]`.
+
+### Added
+- `tests/test_web_security.py`: security regression tests (the HTTP-level ones
+  need the `[web]` extra plus `httpx`; CI installs both).
+
 ## [0.3.0] - 2026-06-04
 
 Correctness & durability. v0.2 shipped analytics that were subtly wrong and a

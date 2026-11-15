@@ -69,7 +69,8 @@ you touch any of them:
 - `edit <note_id>` — open in `$EDITOR` (prints path + suggestions if unset)
 - `import --from <dir>` — rebuild/merge store from exported markdown frontmatter
   (read-only; never writes into `notes/`)
-- `serve [--port 8765]` — web viewer (needs the `[web]` extra)
+- `serve [--port 8765] [--host 127.0.0.1]` — web viewer (needs the `[web]`
+  extra). Loopback-only by default; it has no auth.
 
 ## How to work here
 
@@ -99,8 +100,9 @@ you touch any of them:
 
 A stdlib `unittest` suite lives in `tests/` (as of v0.3): `test_store.py`
 (schema/migration, R derivation, corrupt-store recovery), `test_stats.py`
-(expectancy + streak ordering), `test_io.py` (export→import round-trip) — 18
-tests as of v0.3.0. New store/analytics logic should come with a test there. Run it
+(expectancy + streak ordering), `test_io.py` (export→import round-trip), and
+`test_web_security.py` (escaping, CSRF/Host guard, input validation; web tests
+need `[web]` + `httpx`, else they skip). New store/analytics logic should come with a test there. Run it
 plus the smoke gate that CI runs (`.github/workflows/ci.yml`, Python 3.10–3.12):
 
 ```bash
@@ -126,6 +128,10 @@ pip install -e '.[web]'     # add FastAPI/Uvicorn for `msn serve`
   safe and idempotent.
 - Keep the web viewer's file routes path-traversal safe — route user-supplied
   filenames through `_safe_note_path()` in `cli.py`; never open raw paths.
+- Escape every dynamic value interpolated into the web HTML with `_esc()` (and
+  `_q()` inside URLs). The `security_guard` middleware (`_request_allowed()`)
+  enforces the Host allowlist and blocks cross-site writes — keep new
+  state-changing routes as POST (or add them to that check).
 - Web viewer lives entirely in `create_app()` (FastAPI imported lazily, so the
   core stays dependency-free). Routes: `/`, `/templates`, `/edit/{filename}`,
   `/save/{filename}`, `/create`, `/delete/{filename}` (a state-changing GET —

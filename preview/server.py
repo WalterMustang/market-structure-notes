@@ -13,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from msn.cli import create_app
 import uvicorn
 
-app = create_app()
+# Served behind the Starchild preview proxy, so the public Host name isn't
+# known here; skip the Host allowlist (cross-site write checks still apply).
+app = create_app(allowed_hosts=None)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
